@@ -1,0 +1,13 @@
+{
+  "client_token": "",
+  "device_token": "",
+  "workspace_dir": "",
+  "ask_permission": false,
+  "terminal": {
+    "timeout": 120,
+    "default_shell": "auto"
+  },
+  "scraping": {
+    "char_limit": 50000
+  }
+}

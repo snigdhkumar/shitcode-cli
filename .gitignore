@@ -1,0 +1,21 @@
+# Local configuration (contains personal client tokens - NEVER COMMIT)
+config.json
+
+# Logs and diagnostics
+logs/
+reports/
+
+# Python cache & environment
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.env
+.env.*
+env/
+venv/
+.venv/
+
+# Local backups
+backup/
+*.bak
