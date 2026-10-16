@@ -17,6 +17,8 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 from core.reporter import with_error_reporting
+import os
+import sys
 from core.browser_installer import ensure_browser_installed, is_browser_ready
 
 logger = logging.getLogger("shitcode.tools.browser")
@@ -25,6 +27,14 @@ logger = logging.getLogger("shitcode.tools.browser")
 ROOT_DIR = Path(__file__).resolve().parent.parent
 PROFILE_DIR = ROOT_DIR / ".browser_profile"
 SCREENSHOTS_DIR = ROOT_DIR / "screenshots"
+
+
+def has_gui_display() -> bool:
+    """Detect if the current environment has a physical/desktop display available."""
+    if sys.platform in ("win32", "darwin"):
+        return True
+    # Linux / Unix: check X11 or Wayland display environment variables
+    return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
 
 
 class BrowserManager:
@@ -65,7 +75,12 @@ class BrowserManager:
         Tier 2: Auto-healing if missing executable error, runs installer and retries.
         Tier 3: Fallback to system installed Chrome or Edge (no ms-playwright binaries needed).
         """
-        try_headed_first = (headless_preference is not True)
+        gui_available = has_gui_display()
+        # On desktop systems with a screen (Windows, macOS, Linux with DISPLAY):
+        # ALWAYS prioritize a visible, maximized desktop window (just like Antigravity IDE).
+        # On remote VPS / servers without a GUI display:
+        # Automatically launch in headless mode without display errors.
+        try_headed_first = gui_available
         last_error: Optional[Exception] = None
 
         PROFILE_DIR.mkdir(parents=True, exist_ok=True)
@@ -168,20 +183,26 @@ class BrowserManager:
 
             # If browser already running, simply navigate the active tab
             if self.is_active():
-                try:
-                    await self._page.goto(url, wait_until="domcontentloaded", timeout=20000)
-                    title = await self._page.title()
-                    return {
-                        "success": True,
-                        "url": self._page.url,
-                        "title": title,
-                        "mode": "headless" if self._is_headless else "headed",
-                        "profile": "persistent (.browser_profile)",
-                        "message": f"Navigated existing tab to {self._page.url} ('{title}')",
-                    }
-                except Exception as e:
-                    logger.warning(f"Failed to navigate existing page, restarting browser: {e}")
+                # If running on desktop GUI but session is currently invisible headless,
+                # close headless session and reopen as a visible desktop window!
+                if has_gui_display() and self._is_headless:
+                    logger.info("Upgrading background headless session to visible desktop window...")
                     await self._cleanup()
+                else:
+                    try:
+                        await self._page.goto(url, wait_until="domcontentloaded", timeout=20000)
+                        title = await self._page.title()
+                        return {
+                            "success": True,
+                            "url": self._page.url,
+                            "title": title,
+                            "mode": "headless" if self._is_headless else "headed (Visible Desktop Window)",
+                            "profile": "persistent (.browser_profile)",
+                            "message": f"Navigated existing tab to {self._page.url} ('{title}')",
+                        }
+                    except Exception as e:
+                        logger.warning(f"Failed to navigate existing page, restarting browser: {e}")
+                        await self._cleanup()
 
             # Initialize Playwright instance
             if self._playwright is None:
