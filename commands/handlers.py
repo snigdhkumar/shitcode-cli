@@ -137,10 +137,13 @@ def handle_interactive_browser(arg: str):
         mode_str = f"{CYAN}Headless (VPS/Background){RESET}" if mgr._is_headless else f"{CYAN}Headed (Visible Window){RESET}"
         profile_str = f"{GREEN}Saved logins/cookies present{RESET}" if profile_exists else f"{DIM}Fresh profile{RESET}"
 
+        pw_str = f"{GREEN}[✓]{RESET} playwright" if pw_ok else f"{RED}[x]{RESET} playwright {RED}(missing){RESET}"
+        cr_str = f"{GREEN}[✓]{RESET} self-contained binary" if cr_ok else f"{RED}[x]{RESET} chromium {RED}(missing){RESET}"
+
         print(f"\n{BOLD}ShitCode Browser Automation Status:{RESET}")
         print(f"  * Engine:     {ready_str}")
-        print(f"  * Package:    {'[x] playwright' if pw_ok else '[ ] playwright (missing)'}")
-        print(f"  * Chromium:   {'[x] self-contained binary' if cr_ok else '[ ] chromium (missing)'}")
+        print(f"  * Package:    {pw_str}")
+        print(f"  * Chromium:   {cr_str}")
         print(f"  * Location:   {browsers_dir}")
         print(f"  * Profile:    {profile_str} ({PROFILE_DIR.name})")
         print(f"  * Session:    {active_str} {DIM}({mode_str}){RESET}\n")
@@ -181,14 +184,16 @@ def handle_interactive_browser(arg: str):
                 async def _do_open():
                     res = await mgr.open(url)
                     if res.get("success"):
-                        print(f"{GREEN}[✓] {res.get('message')}{RESET}\n")
+                        msg = res.get("message") or res.get("warning") or f"Browser opened to {url}"
+                        print(f"{GREEN}[✓] {msg}{RESET}\n")
                     else:
                         print(f"{RED}[!] {res.get('error')}{RESET}\n")
                 asyncio.create_task(_do_open())
             else:
                 res = asyncio.run(mgr.open(url))
                 if res.get("success"):
-                    print(f"{GREEN}[✓] {res.get('message')}{RESET}\n")
+                    msg = res.get("message") or res.get("warning") or f"Browser opened to {url}"
+                    print(f"{GREEN}[✓] {msg}{RESET}\n")
                 else:
                     print(f"{RED}[!] {res.get('error')}{RESET}\n")
         except Exception as e:

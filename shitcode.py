@@ -131,6 +131,12 @@ def main():
         success = execute_update_routine(skip_prompt=skip)
         sys.exit(0 if success else 1)
 
+    if len(sys.argv) > 1 and sys.argv[1].lower() == "browser":
+        from commands.handlers import handle_interactive_browser
+        subarg = " ".join(sys.argv[2:])
+        handle_interactive_browser(subarg)
+        sys.exit(0)
+
     parser = argparse.ArgumentParser(
         prog="shitcode",
         description=f"{BOLD}{ORANGE}ShitCode Local Client Agent (v{CLIENT_VERSION}){RESET}\n"

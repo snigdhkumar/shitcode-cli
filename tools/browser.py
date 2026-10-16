@@ -239,13 +239,15 @@ class BrowserManager:
                     self._was_installed_on_demand = False
                 return res
             except Exception as nav_err:
+                mode_str = "headless (VPS/Background)" if self._is_headless else "headed (Visible Desktop Window)"
                 res = {
                     "success": True,
                     "url": url,
                     "title": "Loaded",
-                    "mode": "headless" if self._is_headless else "headed",
+                    "mode": mode_str,
                     "profile": "persistent (.browser_profile)",
                     "warning": f"Opened with navigation notice: {nav_err}",
+                    "message": f"Browser opened to '{url}' (Notice: {nav_err})",
                 }
                 if self._was_installed_on_demand:
                     res["installed_on_demand"] = True
