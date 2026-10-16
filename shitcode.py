@@ -19,6 +19,10 @@ ROOT_DIR = Path(__file__).resolve().parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
+# Ensure Playwright browser binaries are stored self-contained in shitcode-cli/.browsers
+if "PLAYWRIGHT_BROWSERS_PATH" not in os.environ:
+    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(ROOT_DIR / ".browsers")
+
 # Core config helpers
 from core.config import (
     get_fallback_workspace,

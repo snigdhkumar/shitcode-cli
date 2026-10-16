@@ -123,20 +123,46 @@ def handle_interactive_browser(arg: str):
     mgr = BrowserManager.get_instance()
 
     if subcmd in ("status", "info"):
+        from core.browser_installer import get_playwright_browsers_dir
+        from tools.browser import PROFILE_DIR
         ready = is_browser_ready()
         pw_ok = is_playwright_installed()
         cr_ok = is_chromium_installed()
         active = mgr.is_active()
+        browsers_dir = get_playwright_browsers_dir()
+        profile_exists = PROFILE_DIR.exists() and any(PROFILE_DIR.iterdir()) if PROFILE_DIR.exists() else False
 
         ready_str = f"{GREEN}Installed & Ready{RESET}" if ready else f"{YELLOW}Not Installed (Run 'browser install'){RESET}"
         active_str = f"{GREEN}Active Tab ({mgr._page.url}){RESET}" if (active and mgr._page) else f"{DIM}Inactive{RESET}"
         mode_str = f"{CYAN}Headless (VPS/Background){RESET}" if mgr._is_headless else f"{CYAN}Headed (Visible Window){RESET}"
+        profile_str = f"{GREEN}Saved logins/cookies present{RESET}" if profile_exists else f"{DIM}Fresh profile{RESET}"
 
         print(f"\n{BOLD}ShitCode Browser Automation Status:{RESET}")
-        print(f"  ● Engine:    {ready_str}")
-        print(f"  ● Package:   {'[✓] playwright' if pw_ok else '[ ] playwright (missing)'}")
-        print(f"  ● Chromium:  {'[✓] automated binary' if cr_ok else '[ ] chromium (missing)'}")
-        print(f"  ● Session:   {active_str} {DIM}({mode_str}){RESET}\n")
+        print(f"  * Engine:     {ready_str}")
+        print(f"  * Package:    {'[x] playwright' if pw_ok else '[ ] playwright (missing)'}")
+        print(f"  * Chromium:   {'[x] self-contained binary' if cr_ok else '[ ] chromium (missing)'}")
+        print(f"  * Location:   {browsers_dir}")
+        print(f"  * Profile:    {profile_str} ({PROFILE_DIR.name})")
+        print(f"  * Session:    {active_str} {DIM}({mode_str}){RESET}\n")
+
+    elif subcmd in ("clean", "reset-profile", "clear-profile"):
+        import shutil
+        from tools.browser import PROFILE_DIR
+        if mgr.is_active():
+            print(f"\n{YELLOW}[*] Closing active browser before cleaning...{RESET}")
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    asyncio.create_task(mgr.close())
+                else:
+                    asyncio.run(mgr.close())
+            except Exception:
+                pass
+        if PROFILE_DIR.exists():
+            shutil.rmtree(PROFILE_DIR, ignore_errors=True)
+            print(f"\n{GREEN}[✓] Browser user profile wiped clean ({PROFILE_DIR.name}). Cookies and logins reset.{RESET}\n")
+        else:
+            print(f"\n{DIM}[i] Profile directory already clean.{RESET}\n")
 
     elif subcmd in ("install", "setup", "download"):
         print(f"\n{BOLD}{CYAN}[*] Checking browser dependencies...{RESET}")

@@ -19,3 +19,8 @@ venv/
 # Local backups
 backup/
 *.bak
+
+# Self-contained browser engine & persistent user profile
+.browsers/
+.browser_profile/
+screenshots/

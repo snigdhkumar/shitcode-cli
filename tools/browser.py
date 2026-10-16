@@ -21,21 +21,23 @@ from core.browser_installer import ensure_browser_installed, is_browser_ready
 
 logger = logging.getLogger("shitcode.tools.browser")
 
-# Workspace root for saving screenshots
+# Workspace root & browser data directories
 ROOT_DIR = Path(__file__).resolve().parent.parent
+PROFILE_DIR = ROOT_DIR / ".browser_profile"
+SCREENSHOTS_DIR = ROOT_DIR / "screenshots"
 
 
 class BrowserManager:
-    """Singleton controller managing the active Playwright browser session."""
+    """Singleton controller managing the active Playwright browser session with persistent user profile."""
 
     _instance: Optional[BrowserManager] = None
 
     def __init__(self):
         self._playwright: Optional[Any] = None
-        self._browser: Optional[Any] = None
         self._context: Optional[Any] = None
         self._page: Optional[Any] = None
         self._is_headless: bool = False
+        self._was_installed_on_demand: bool = False
         self._lock = asyncio.Lock()
 
     @classmethod
@@ -48,57 +50,85 @@ class BrowserManager:
         return self._page is not None and not self._page.is_closed()
 
     async def _ensure_ready(self) -> Tuple[bool, str]:
-        """Verify playwright & chromium are available, downloading on demand if needed."""
+        """Verify playwright & chromium are available in .browsers, downloading on demand if needed."""
         if not is_browser_ready():
+            self._was_installed_on_demand = True
             success, msg = await asyncio.to_thread(ensure_browser_installed)
             if not success:
                 return False, msg
         return True, "Ready"
 
     async def _launch_browser(self, headless_preference: Optional[bool] = None) -> Tuple[Any, bool]:
-        """Launch browser using a 3-tier fallback and self-healing strategy.
+        """Launch browser using persistent context with 3-tier fallback and desktop appearance.
         
-        Tier 1: Playwright automated Chromium (headed first, unless headless requested or no GUI).
+        Tier 1: Playwright automated Chromium in .browsers/ with persistent user profile.
         Tier 2: Auto-healing if missing executable error, runs installer and retries.
         Tier 3: Fallback to system installed Chrome or Edge (no ms-playwright binaries needed).
         """
         try_headed_first = (headless_preference is not True)
         last_error: Optional[Exception] = None
 
+        PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+
         async def _try_launch_driver(headless: bool, channel: Optional[str] = None) -> Any:
-            args = ["--no-sandbox", "--disable-dev-shm-usage"]
+            common_args = [
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+            ]
             if not headless:
-                args.append("--disable-blink-features=AutomationControlled")
-            kwargs: Dict[str, Any] = {"headless": headless, "args": args}
+                # Desktop mode: maximized window, standard flags, normal appearance
+                common_args.extend([
+                    "--start-maximized",
+                    "--disable-blink-features=AutomationControlled",
+                ])
+                kwargs: Dict[str, Any] = {
+                    "user_data_dir": str(PROFILE_DIR),
+                    "headless": False,
+                    "viewport": None,  # Full desktop window size
+                    "ignore_default_args": ["--enable-automation"],
+                    "args": common_args,
+                }
+            else:
+                # Headless mode for remote / VPS servers
+                kwargs: Dict[str, Any] = {
+                    "user_data_dir": str(PROFILE_DIR),
+                    "headless": True,
+                    "viewport": {"width": 1280, "height": 800},
+                    "args": common_args,
+                }
+
             if channel:
                 kwargs["channel"] = channel
-            return await self._playwright.chromium.launch(**kwargs)
+
+            return await self._playwright.chromium.launch_persistent_context(**kwargs)
 
         def is_missing_binary_err(err: Exception) -> bool:
             msg = str(err).lower()
             return "executable doesn't exist" in msg or "playwright install" in msg or "run 'playwright" in msg
 
-        # Attempt A: Standard Playwright Chromium with auto-healing
+        # Attempt A: Standard Playwright Chromium in .browsers with auto-healing
         for attempt in range(2):
             if try_headed_first:
                 try:
-                    b = await _try_launch_driver(headless=False)
-                    return b, False
+                    ctx = await _try_launch_driver(headless=False)
+                    return ctx, False
                 except Exception as headed_err:
                     last_error = headed_err
                     if is_missing_binary_err(headed_err) and attempt == 0:
                         logger.info("Playwright binary missing during headed launch. Auto-healing with ensure_browser_installed(force=True)...")
+                        self._was_installed_on_demand = True
                         await asyncio.to_thread(ensure_browser_installed, force=True)
                         continue
                     logger.info(f"Headed launch failed ({headed_err}), attempting headless...")
 
             try:
-                b = await _try_launch_driver(headless=True)
-                return b, True
+                ctx = await _try_launch_driver(headless=True)
+                return ctx, True
             except Exception as headless_err:
                 last_error = headless_err
                 if is_missing_binary_err(headless_err) and attempt == 0:
                     logger.info("Playwright binary missing during headless launch. Auto-healing with ensure_browser_installed(force=True)...")
+                    self._was_installed_on_demand = True
                     await asyncio.to_thread(ensure_browser_installed, force=True)
                     continue
 
@@ -107,22 +137,22 @@ class BrowserManager:
         for ch in ["chrome", "msedge"]:
             if try_headed_first:
                 try:
-                    b = await _try_launch_driver(headless=False, channel=ch)
+                    ctx = await _try_launch_driver(headless=False, channel=ch)
                     logger.info(f"Successfully launched system browser channel '{ch}' (headed).")
-                    return b, False
+                    return ctx, False
                 except Exception:
                     pass
             try:
-                b = await _try_launch_driver(headless=True, channel=ch)
+                ctx = await _try_launch_driver(headless=True, channel=ch)
                 logger.info(f"Successfully launched system browser channel '{ch}' (headless).")
-                return b, True
+                return ctx, True
             except Exception:
                 pass
 
         raise RuntimeError(f"Could not launch browser through Playwright or system channels: {last_error}")
 
     async def open(self, url: str, headless: Optional[bool] = None) -> Dict[str, Any]:
-        """Launch browser session and navigate to target URL with headed-first strategy."""
+        """Launch browser session with persistent user profile and navigate to target URL."""
         async with self._lock:
             ready, msg = await self._ensure_ready()
             if not ready:
@@ -146,6 +176,7 @@ class BrowserManager:
                         "url": self._page.url,
                         "title": title,
                         "mode": "headless" if self._is_headless else "headed",
+                        "profile": "persistent (.browser_profile)",
                         "message": f"Navigated existing tab to {self._page.url} ('{title}')",
                     }
                 except Exception as e:
@@ -157,36 +188,48 @@ class BrowserManager:
                 self._playwright = await async_playwright().start()
 
             try:
-                self._browser, self._is_headless = await self._launch_browser(headless_preference=headless)
+                self._context, self._is_headless = await self._launch_browser(headless_preference=headless)
             except Exception as launch_err:
                 await self._cleanup()
                 return {"success": False, "error": f"Failed to launch browser: {launch_err}"}
 
             try:
-                self._context = await self._browser.new_context(
-                    viewport={"width": 1280, "height": 800},
-                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-                )
-                self._page = await self._context.new_page()
+                # Reuse the primary page created with persistent context or open a new one
+                if self._context.pages:
+                    self._page = self._context.pages[0]
+                else:
+                    self._page = await self._context.new_page()
+
                 await self._page.goto(url, wait_until="domcontentloaded", timeout=25000)
                 title = await self._page.title()
 
-                mode_str = "headless (VPS/Background)" if self._is_headless else "headed (Visible Window)"
-                return {
+                mode_str = "headless (VPS/Background)" if self._is_headless else "headed (Visible Desktop Window)"
+                res: Dict[str, Any] = {
                     "success": True,
                     "url": self._page.url,
                     "title": title,
                     "mode": mode_str,
-                    "message": f"Browser launched in {mode_str} and opened {self._page.url} ('{title}')",
+                    "profile": "persistent (.browser_profile)",
+                    "message": f"Browser launched in {mode_str} with persistent profile and opened {self._page.url} ('{title}')",
                 }
+                if self._was_installed_on_demand:
+                    res["installed_on_demand"] = True
+                    res["install_notice"] = "Chromium browser engine was downloaded into shitcode-cli/.browsers/ on demand."
+                    self._was_installed_on_demand = False
+                return res
             except Exception as nav_err:
-                return {
+                res = {
                     "success": True,
                     "url": url,
                     "title": "Loaded",
                     "mode": "headless" if self._is_headless else "headed",
+                    "profile": "persistent (.browser_profile)",
                     "warning": f"Opened with navigation notice: {nav_err}",
                 }
+                if self._was_installed_on_demand:
+                    res["installed_on_demand"] = True
+                    self._was_installed_on_demand = False
+                return res
 
     async def click(self, selector: str, text: Optional[str] = None) -> Dict[str, Any]:
         """Click an interactive element on the page."""
@@ -335,12 +378,6 @@ class BrowserManager:
             pass
 
         try:
-            if self._browser:
-                await self._browser.close()
-        except Exception:
-            pass
-
-        try:
             if self._playwright:
                 await self._playwright.stop()
         except Exception:
@@ -348,9 +385,8 @@ class BrowserManager:
 
         self._page = None
         self._context = None
-        self._browser = None
         self._playwright = None
-        return {"success": True, "message": "Browser session closed successfully."}
+        return {"success": True, "message": "Browser session closed successfully (user profile saved)."}
 
 
 # =====================================================================
