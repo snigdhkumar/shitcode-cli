@@ -43,6 +43,10 @@ async def confirm_tool_execution(tool_name: str, arguments: Dict[str, Any], stat
         snippet = arguments["path"]
     elif "code" in arguments:
         snippet = arguments["code"].splitlines()[0] if arguments["code"].splitlines() else "Python code"
+    elif "url" in arguments:
+        snippet = arguments["url"]
+    elif "selector" in arguments:
+        snippet = f"{arguments['selector']}" + (f" -> '{arguments['text']}'" if "text" in arguments else "")
     else:
         snippet = json.dumps(arguments, ensure_ascii=False)
 

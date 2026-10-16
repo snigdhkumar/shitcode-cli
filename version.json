@@ -1,5 +1,5 @@
 {
-  "version": "1.0.1",
+  "version": "1.1.0",
   "name": "shitcode-cli",
   "description": "ShitCode Local Machine Control Plane CLI",
   "repository": "https://github.com/snigdhkumar/shitcode-cli"

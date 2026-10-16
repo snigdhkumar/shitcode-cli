@@ -17,6 +17,10 @@ MODIFYING_TOOLS = {
     "multi_patch_file",
     "skill_manage",
     "process_manage",
+    "browser_open",
+    "browser_click",
+    "browser_type",
+    "browser_close",
 }
 
 # Dynamically load registered tools

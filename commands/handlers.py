@@ -55,6 +55,7 @@ def handle_interactive_help():
 {ORANGE}│{RESET}  {BOLD}update [-y]{RESET}      {DIM}Update ShitCode CLI to the latest version via Git    {RESET}{ORANGE}│{RESET}
 {ORANGE}│{RESET}  {BOLD}workspace <path>{RESET} {DIM}Switch project folder live without restarting        {RESET}{ORANGE}│{RESET}
 {ORANGE}│{RESET}  {BOLD}perm{RESET}             {DIM}Toggle between Auto-Approve & Interactive Approval    {RESET}{ORANGE}│{RESET}
+{ORANGE}│{RESET}  {BOLD}browser <cmd>{RESET}    {DIM}Browser automation (open, close, status, install)    {RESET}{ORANGE}│{RESET}
 {ORANGE}│{RESET}  {BOLD}status{RESET}           {DIM}View live connection uptime, session ID, & ping      {RESET}{ORANGE}│{RESET}
 {ORANGE}│{RESET}  {BOLD}tools{RESET}            {DIM}List all available tools & dynamic descriptions       {RESET}{ORANGE}│{RESET}
 {ORANGE}│{RESET}  {BOLD}clear{RESET}            {DIM}Clear console screen and re-render status banner      {RESET}{ORANGE}│{RESET}
@@ -106,6 +107,95 @@ def handle_interactive_tools(tools_map: Optional[Dict[str, Any]] = None):
     print(f"  {DIM}Type any command, or press ESC (or 'clear') to return to banner.{RESET}\n")
 
 
+def handle_interactive_browser(arg: str):
+    """Handle interactive browser commands (open, close, status, install)."""
+    subparts = arg.strip().split(maxsplit=1)
+    subcmd = subparts[0].lower() if subparts else "status"
+    subarg = subparts[1].strip() if len(subparts) > 1 else ""
+
+    try:
+        from core.browser_installer import is_browser_ready, is_playwright_installed, is_chromium_installed, ensure_browser_installed
+        from tools.browser import BrowserManager
+    except ImportError as e:
+        print(f"\n{RED}[!] Browser module error: {e}{RESET}\n")
+        return
+
+    mgr = BrowserManager.get_instance()
+
+    if subcmd in ("status", "info"):
+        ready = is_browser_ready()
+        pw_ok = is_playwright_installed()
+        cr_ok = is_chromium_installed()
+        active = mgr.is_active()
+
+        ready_str = f"{GREEN}Installed & Ready{RESET}" if ready else f"{YELLOW}Not Installed (Run 'browser install'){RESET}"
+        active_str = f"{GREEN}Active Tab ({mgr._page.url}){RESET}" if (active and mgr._page) else f"{DIM}Inactive{RESET}"
+        mode_str = f"{CYAN}Headless (VPS/Background){RESET}" if mgr._is_headless else f"{CYAN}Headed (Visible Window){RESET}"
+
+        print(f"\n{BOLD}ShitCode Browser Automation Status:{RESET}")
+        print(f"  ● Engine:    {ready_str}")
+        print(f"  ● Package:   {'[✓] playwright' if pw_ok else '[ ] playwright (missing)'}")
+        print(f"  ● Chromium:  {'[✓] automated binary' if cr_ok else '[ ] chromium (missing)'}")
+        print(f"  ● Session:   {active_str} {DIM}({mode_str}){RESET}\n")
+
+    elif subcmd in ("install", "setup", "download"):
+        print(f"\n{BOLD}{CYAN}[*] Checking browser dependencies...{RESET}")
+        success, msg = ensure_browser_installed(interactive=True)
+        if success:
+            print(f"{GREEN}[✓] Browser engine is ready! Run 'browser open <url>' or let AI control it.{RESET}\n")
+        else:
+            print(f"{RED}[!] Browser installation error: {msg}{RESET}\n")
+
+    elif subcmd in ("open", "launch", "goto"):
+        url = subarg or "https://google.com"
+        print(f"\n{CYAN}[*] Launching browser to '{url}' (headed with headless fallback)...{RESET}")
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                async def _do_open():
+                    res = await mgr.open(url)
+                    if res.get("success"):
+                        print(f"{GREEN}[✓] {res.get('message')}{RESET}\n")
+                    else:
+                        print(f"{RED}[!] {res.get('error')}{RESET}\n")
+                asyncio.create_task(_do_open())
+            else:
+                res = asyncio.run(mgr.open(url))
+                if res.get("success"):
+                    print(f"{GREEN}[✓] {res.get('message')}{RESET}\n")
+                else:
+                    print(f"{RED}[!] {res.get('error')}{RESET}\n")
+        except Exception as e:
+            print(f"{RED}[!] Failed to open browser: {e}{RESET}\n")
+
+    elif subcmd in ("close", "exit", "stop"):
+        if not mgr.is_active():
+            print(f"\n{DIM}[i] No active browser session to close.{RESET}\n")
+            return
+        print(f"\n{CYAN}[*] Closing browser session...{RESET}")
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                async def _do_close():
+                    res = await mgr.close()
+                    print(f"{GREEN}[✓] {res.get('message', 'Closed.')}{RESET}\n")
+                asyncio.create_task(_do_close())
+            else:
+                res = asyncio.run(mgr.close())
+                print(f"{GREEN}[✓] {res.get('message', 'Closed.')}{RESET}\n")
+        except Exception as e:
+            print(f"{RED}[!] Error closing browser: {e}{RESET}\n")
+
+    else:
+        print(f"""
+{BOLD}Usage: browser <command>{RESET}
+  browser open [url]   Launch browser window and open URL
+  browser close        Close active browser session
+  browser status       Check if Playwright & Chromium are installed
+  browser install      Download & install automated Chromium browser
+""")
+
+
 def process_command(cmd_raw: str, state: Any, tools_map: Optional[Dict[str, Any]] = None):
     """Execute an interactive CLI command (synchronous & non-blocking)."""
     if not cmd_raw:
@@ -125,6 +215,9 @@ def process_command(cmd_raw: str, state: Any, tools_map: Optional[Dict[str, Any]
         else:
             state.active_prompt = "confirm_update"
             print(f"\n{BOLD}{YELLOW}[?] Are you sure you want to update to the latest CLI version? [y/N]: {RESET}", end="", flush=True)
+
+    elif action in ("browser", "/browser"):
+        handle_interactive_browser(arg)
 
     elif action in ("status", "/status"):
         handle_interactive_status(state, tools_map=tools_map)

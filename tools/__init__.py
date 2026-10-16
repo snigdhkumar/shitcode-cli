@@ -13,6 +13,14 @@ from tools.search import grep_search, find_files, search_files, git_status
 from tools.execution import execute_code
 from tools.scraping import web_extract
 from tools.skills import skills_list, skill_view, skill_manage
+from tools.browser import (
+    browser_open,
+    browser_click,
+    browser_type,
+    browser_extract,
+    browser_screenshot,
+    browser_close,
+)
 
 if TYPE_CHECKING:
     from mcp.server.mcpserver import MCPServer
@@ -42,6 +50,13 @@ ALL_TOOLS: List[Callable[..., Any]] = [
     skills_list,
     skill_view,
     skill_manage,
+    # Browser Automation (Playwright)
+    browser_open,
+    browser_click,
+    browser_type,
+    browser_extract,
+    browser_screenshot,
+    browser_close,
 ]
 
 

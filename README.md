@@ -31,11 +31,12 @@ chmod +x shitcode.sh
 ## CLI Commands
 
 Inside the interactive terminal:
+- `browser <cmd>`: Control browser engine (`browser open [url]`, `close`, `status`, `install`).
 - `update [-y]`: Update client to the latest version via Git.
 - `workspace <path>`: Switch project folder live without restarting.
 - `perm`: Toggle between Auto-Approve and Interactive Approval.
 - `status`: View live connection uptime, session ID, and ping.
-- `tools`: List all 17 available tools and dynamic descriptions.
+- `tools`: List all 23 available tools and dynamic descriptions.
 - `token`: View masked active device token.
 - `reset`: Reset active device token and configure a new one.
 - `clear`: Clear screen and re-render status banner.
