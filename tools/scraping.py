@@ -1,4 +1,4 @@
-"""Web content scraping and documentation extraction tools for MCP_NEW.
+"""Web content scraping and documentation extraction tools for ShitCode.
 Extracts clean, readable markdown or text from web URLs using httpx and BeautifulSoup.
 """
 

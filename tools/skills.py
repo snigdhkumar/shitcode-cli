@@ -1,4 +1,4 @@
-"""Self-improving skills system for MCP_NEW.
+"""Self-improving skills system for ShitCode.
 Scans and manages clean custom developer skills inside ./skills/ with zero Hermes bloat.
 """
 

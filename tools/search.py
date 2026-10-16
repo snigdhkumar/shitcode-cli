@@ -1,4 +1,4 @@
-"""Search and repository inspection tools for MCP_NEW.
+"""Search and repository inspection tools for ShitCode.
 Implements Antigravity-style regex/literal grep search with file inclusion filters,
 glob filename discovery, and git status / working diff inspection.
 """

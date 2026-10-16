@@ -1,4 +1,4 @@
-"""Filesystem and precision code editing tools for MCP_NEW.
+"""Filesystem and precision code editing tools for ShitCode.
 Implements line-numbered file viewing, safe writes, unified diff patching,
 atomic multi-patching (from Antigravity), and structured directory listing.
 """

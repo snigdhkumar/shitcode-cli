@@ -1,4 +1,4 @@
-"""Terminal and background process execution tools for MCP_NEW.
+"""Terminal and background process execution tools for ShitCode.
 Supports native Windows (PowerShell/CMD) and Linux (Bash/sh) execution.
 """
 

@@ -19,6 +19,7 @@ from tools.browser import (
     browser_type,
     browser_extract,
     browser_screenshot,
+    browser_actions,
     browser_close,
 )
 
@@ -56,6 +57,7 @@ ALL_TOOLS: List[Callable[..., Any]] = [
     browser_type,
     browser_extract,
     browser_screenshot,
+    browser_actions,
     browser_close,
 ]
 

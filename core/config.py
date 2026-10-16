@@ -1,4 +1,4 @@
-"""Configuration management for ShitCode Local Client."""
+"""Configuration management for ShitCode CLI"""
 
 from __future__ import annotations
 

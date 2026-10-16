@@ -20,6 +20,7 @@ MODIFYING_TOOLS = {
     "browser_open",
     "browser_click",
     "browser_type",
+    "browser_actions",
     "browser_close",
 }
 

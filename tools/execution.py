@@ -1,4 +1,4 @@
-"""Code execution tool for MCP_NEW.
+"""Code execution tool for Shitcode.
 Runs Python snippets in a sandboxed child process with timeout protection.
 """
 
