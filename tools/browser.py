@@ -55,6 +55,72 @@ class BrowserManager:
                 return False, msg
         return True, "Ready"
 
+    async def _launch_browser(self, headless_preference: Optional[bool] = None) -> Tuple[Any, bool]:
+        """Launch browser using a 3-tier fallback and self-healing strategy.
+        
+        Tier 1: Playwright automated Chromium (headed first, unless headless requested or no GUI).
+        Tier 2: Auto-healing if missing executable error, runs installer and retries.
+        Tier 3: Fallback to system installed Chrome or Edge (no ms-playwright binaries needed).
+        """
+        try_headed_first = (headless_preference is not True)
+        last_error: Optional[Exception] = None
+
+        async def _try_launch_driver(headless: bool, channel: Optional[str] = None) -> Any:
+            args = ["--no-sandbox", "--disable-dev-shm-usage"]
+            if not headless:
+                args.append("--disable-blink-features=AutomationControlled")
+            kwargs: Dict[str, Any] = {"headless": headless, "args": args}
+            if channel:
+                kwargs["channel"] = channel
+            return await self._playwright.chromium.launch(**kwargs)
+
+        def is_missing_binary_err(err: Exception) -> bool:
+            msg = str(err).lower()
+            return "executable doesn't exist" in msg or "playwright install" in msg or "run 'playwright" in msg
+
+        # Attempt A: Standard Playwright Chromium with auto-healing
+        for attempt in range(2):
+            if try_headed_first:
+                try:
+                    b = await _try_launch_driver(headless=False)
+                    return b, False
+                except Exception as headed_err:
+                    last_error = headed_err
+                    if is_missing_binary_err(headed_err) and attempt == 0:
+                        logger.info("Playwright binary missing during headed launch. Auto-healing with ensure_browser_installed(force=True)...")
+                        await asyncio.to_thread(ensure_browser_installed, force=True)
+                        continue
+                    logger.info(f"Headed launch failed ({headed_err}), attempting headless...")
+
+            try:
+                b = await _try_launch_driver(headless=True)
+                return b, True
+            except Exception as headless_err:
+                last_error = headless_err
+                if is_missing_binary_err(headless_err) and attempt == 0:
+                    logger.info("Playwright binary missing during headless launch. Auto-healing with ensure_browser_installed(force=True)...")
+                    await asyncio.to_thread(ensure_browser_installed, force=True)
+                    continue
+
+        # Attempt B: Fall back to system installed Chrome or Edge channels
+        logger.info("Standard Chromium launch failed, attempting system browser channels (Chrome / Edge)...")
+        for ch in ["chrome", "msedge"]:
+            if try_headed_first:
+                try:
+                    b = await _try_launch_driver(headless=False, channel=ch)
+                    logger.info(f"Successfully launched system browser channel '{ch}' (headed).")
+                    return b, False
+                except Exception:
+                    pass
+            try:
+                b = await _try_launch_driver(headless=True, channel=ch)
+                logger.info(f"Successfully launched system browser channel '{ch}' (headless).")
+                return b, True
+            except Exception:
+                pass
+
+        raise RuntimeError(f"Could not launch browser through Playwright or system channels: {last_error}")
+
     async def open(self, url: str, headless: Optional[bool] = None) -> Dict[str, Any]:
         """Launch browser session and navigate to target URL with headed-first strategy."""
         async with self._lock:
@@ -90,33 +156,11 @@ class BrowserManager:
             if self._playwright is None:
                 self._playwright = await async_playwright().start()
 
-            # Headed-first strategy: try headed unless caller forced headless
-            launch_headless = True if headless is True else False
-            browser_launched = False
-
-            if not launch_headless:
-                try:
-                    self._browser = await self._playwright.chromium.launch(
-                        headless=False,
-                        args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-blink-features=AutomationControlled"],
-                    )
-                    self._is_headless = False
-                    browser_launched = True
-                except Exception as headed_err:
-                    logger.info(f"Headed browser launch failed ({headed_err}), attempting headless fallback...")
-
-            if not browser_launched:
-                # Headless fallback for VPS or servers without display
-                try:
-                    self._browser = await self._playwright.chromium.launch(
-                        headless=True,
-                        args=["--no-sandbox", "--disable-dev-shm-usage"],
-                    )
-                    self._is_headless = True
-                    browser_launched = True
-                except Exception as headless_err:
-                    await self._cleanup()
-                    return {"success": False, "error": f"Failed to launch browser: {headless_err}"}
+            try:
+                self._browser, self._is_headless = await self._launch_browser(headless_preference=headless)
+            except Exception as launch_err:
+                await self._cleanup()
+                return {"success": False, "error": f"Failed to launch browser: {launch_err}"}
 
             try:
                 self._context = await self._browser.new_context(

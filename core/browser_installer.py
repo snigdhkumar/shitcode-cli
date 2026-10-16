@@ -4,11 +4,12 @@ Keeps repository and shitcode.zip ultralight (~40 KB) by only installing when re
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Tuple
+from typing import Dict, Optional, Tuple
 
 
 def is_playwright_installed() -> bool:
@@ -31,33 +32,87 @@ def get_playwright_browsers_dir() -> Path:
         return Path.home() / ".cache" / "ms-playwright"
 
 
+def get_expected_chromium_revisions() -> Dict[str, str]:
+    """Inspect Playwright's internal browsers.json to get exact required revisions."""
+    if not is_playwright_installed():
+        return {}
+    try:
+        import playwright
+        pkg_dir = Path(playwright.__file__).parent
+        for candidate in [
+            pkg_dir / "driver" / "package" / "browsers.json",
+            pkg_dir / "driver" / "browsers.json",
+        ]:
+            if candidate.exists():
+                data = json.loads(candidate.read_text(encoding="utf-8"))
+                revs: Dict[str, str] = {}
+                for b in data.get("browsers", []):
+                    name = b.get("name")
+                    rev = b.get("revision")
+                    if name in ("chromium", "chromium-headless-shell") and rev:
+                        revs[name] = str(rev)
+                return revs
+    except Exception:
+        pass
+    return {}
+
+
 def is_chromium_installed() -> bool:
-    """Check if Chromium binary exists in the Playwright cache."""
+    """Check if Chromium binaries matching the current Playwright version exist in cache."""
     browsers_dir = get_playwright_browsers_dir()
     if not browsers_dir.exists():
         return False
-    # Look for chromium-* folders containing chrome.exe or chrome/chromium
+
+    expected = get_expected_chromium_revisions()
+    if expected:
+        # Check standard chromium
+        chromium_rev = expected.get("chromium")
+        if chromium_rev:
+            folder = browsers_dir / f"chromium-{chromium_rev}"
+            if not folder.exists():
+                return False
+            if not (folder / "INSTALLATION_COMPLETE").exists():
+                has_exe = any(folder.rglob("chrome.exe")) if sys.platform == "win32" else any(folder.rglob("chrome"))
+                if not has_exe:
+                    return False
+
+        # Check headless shell (used by modern Playwright for headless=True)
+        shell_rev = expected.get("chromium-headless-shell")
+        if shell_rev:
+            shell_folder = browsers_dir / f"chromium_headless_shell-{shell_rev}"
+            if not shell_folder.exists():
+                return False
+            if not (shell_folder / "INSTALLATION_COMPLETE").exists():
+                has_shell = any(shell_folder.rglob("*headless*.exe")) if sys.platform == "win32" else any(shell_folder.rglob("*headless*"))
+                if not has_shell:
+                    return False
+
+        return True
+
+    # Fallback heuristic if browsers.json was unreadable
     for folder in browsers_dir.glob("chromium-*"):
+        if (folder / "INSTALLATION_COMPLETE").exists():
+            return True
         if sys.platform == "win32":
-            if (folder / "chrome-win" / "chrome.exe").exists() or (folder / "chrome-win64" / "chrome.exe").exists():
+            if any(folder.rglob("chrome.exe")):
                 return True
         else:
-            if (folder / "chrome-linux" / "chrome").exists():
+            if any(folder.rglob("chrome")):
                 return True
     return False
 
 
 def is_browser_ready() -> bool:
-    """Return True if both playwright package and chromium executable are installed."""
+    """Return True if both playwright package and exact chromium executables are installed."""
     return is_playwright_installed() and is_chromium_installed()
 
 
-def ensure_browser_installed(interactive: bool = True) -> Tuple[bool, str]:
-    """Ensure playwright package and Chromium binary are installed on the local system.
+def ensure_browser_installed(interactive: bool = True, force: bool = False) -> Tuple[bool, str]:
+    """Ensure playwright package and Chromium binaries are installed on the local system.
     
     Downloads directly into the user's OS cache, keeping the git repository clean.
     """
-    if is_browser_ready():
+    if not force and is_browser_ready():
         return True, "Browser engine is ready."
 
     print("\n[*] Initializing browser engine (one-time local setup)...", flush=True)
@@ -80,11 +135,12 @@ def ensure_browser_installed(interactive: bool = True) -> Tuple[bool, str]:
         except Exception as e:
             return False, f"Error launching pip install playwright: {e}"
 
-    # 2. Download Chromium binary to OS cache if missing
-    if not is_chromium_installed():
-        print("  -> Downloading automated Chromium browser binary...", flush=True)
+    # 2. Download Chromium & Headless Shell binaries to OS cache
+    if force or not is_chromium_installed():
+        print("  -> Downloading automated Chromium browser binaries (Chrome & Headless Shell)...", flush=True)
         try:
-            cmd = [sys.executable, "-m", "playwright", "install", "chromium"]
+            # Install chromium (and headless shell)
+            cmd = [sys.executable, "-m", "playwright", "install", "chromium", "chromium-headless-shell"]
             proc = subprocess.run(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -93,10 +149,20 @@ def ensure_browser_installed(interactive: bool = True) -> Tuple[bool, str]:
                 check=False,
             )
             if proc.returncode != 0:
-                err = proc.stderr.strip() or proc.stdout.strip()
-                return False, f"Failed to download Chromium binary: {err}"
+                # Fallback to general chromium install
+                cmd_fallback = [sys.executable, "-m", "playwright", "install", "chromium"]
+                proc = subprocess.run(
+                    cmd_fallback,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    check=False,
+                )
+                if proc.returncode != 0:
+                    err = proc.stderr.strip() or proc.stdout.strip()
+                    return False, f"Failed to download Chromium binary: {err}"
         except Exception as e:
-            return False, f"Error launching playwright install chromium: {e}"
+            return False, f"Error launching playwright install: {e}"
 
     print("[✓] Browser engine ready (Chromium installed in OS cache).\n", flush=True)
     return True, "Chromium browser engine ready."
