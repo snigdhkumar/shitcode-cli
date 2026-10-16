@@ -36,7 +36,7 @@ Inside the interactive terminal:
 - `workspace <path>`: Switch project folder live without restarting.
 - `perm`: Toggle between Auto-Approve and Interactive Approval.
 - `status`: View live connection uptime, session ID, and ping.
-- `tools`: List all 23 available tools and dynamic descriptions.
+- `tools`: List all 24 available tools and dynamic descriptions.
 - `token`: View masked active device token.
 - `reset`: Reset active device token and configure a new one.
 - `clear`: Clear screen and re-render status banner.

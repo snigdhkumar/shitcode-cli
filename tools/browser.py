@@ -17,6 +17,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -242,12 +243,38 @@ class BrowserManager:
 
         target = target.strip()
 
-        # 1. Direct CSS / XPath selector
-        if target.startswith(("#", ".", "//", "xpath=", "css=", "[")):
+        # 0. Tag-constrained text selector detection (e.g. 'button:has-text("Male")' or 'a:text("Link")')
+        # If the model specifies a restrictive tag that does not exist in the DOM (e.g. dropdown options
+        # that render as <div> or <span> instead of <button>), extract the inner text and locate flexibly.
+        text_match = re.search(r':(?:has-text|text)\((["\']?)(.*?)\1\)', target, re.IGNORECASE)
+        if text_match:
+            try:
+                exact_loc = page.locator(target).first
+                if await exact_loc.count() > 0:
+                    return exact_loc
+            except Exception:
+                pass
+
+            inner_text = text_match.group(2).strip()
+            if inner_text:
+                for candidate in (
+                    page.get_by_text(inner_text, exact=False).first,
+                    page.get_by_role("option", name=inner_text, exact=False).first,
+                    page.get_by_role("button", name=inner_text, exact=False).first,
+                    page.locator(f":is(button, div, span, li, a, [role='option'], [role='button']):has-text({json.dumps(inner_text)})").first,
+                ):
+                    try:
+                        if await candidate.count() > 0:
+                            return candidate
+                    except Exception:
+                        pass
+
+        # 1. Direct CSS / XPath / text engine selector
+        if target.startswith(("#", ".", "//", "xpath=", "css=", "[", "text=")):
             return page.locator(target).first
 
-        # 2. Try by Accessibility Role
-        for role in ("button", "link", "tab", "menuitem", "checkbox", "radio"):
+        # 2. Try by Accessibility Role (including dropdown options, comboboxes, menuitems)
+        for role in ("button", "link", "tab", "menuitem", "option", "combobox", "checkbox", "radio"):
             try:
                 loc = page.get_by_role(role, name=target, exact=False).first
                 if await loc.count() > 0:
@@ -271,7 +298,7 @@ class BrowserManager:
         except Exception:
             pass
 
-        # 5. Try by Visible Text
+        # 5. Try by Visible Text across any element
         try:
             loc = page.get_by_text(target, exact=False).first
             if await loc.count() > 0:
@@ -279,11 +306,19 @@ class BrowserManager:
         except Exception:
             pass
 
-        # Fallback: standard locator
+        # 6. Fallback: Interactive elements matching text
+        try:
+            loc = page.locator(f":is(button, div, span, li, a, [role='option'], [role='button']):has-text({json.dumps(target)})").first
+            if await loc.count() > 0:
+                return loc
+        except Exception:
+            pass
+
+        # Final Fallback: standard locator
         return page.locator(target).first
 
     async def _get_page_hints(self) -> Dict[str, Any]:
-        """Extract available buttons and input names on the current page to assist failure diagnosis."""
+        """Extract available buttons, inputs, and dropdown options on the current page to assist failure diagnosis."""
         if not self._page:
             return {}
         try:
@@ -297,7 +332,11 @@ class BrowserManager:
                     .map(i => (i.placeholder || i.name || i.getAttribute('aria-label') || '').trim())
                     .filter(t => t.length > 0 && t.length < 40)
                     .slice(0, 10);
-                return { buttons, inputs };
+                const options = Array.from(document.querySelectorAll('[role="option"], [role="menuitem"], .cursor-pointer'))
+                    .map(o => (o.innerText || '').trim())
+                    .filter(t => t.length > 0 && t.length < 40 && !buttons.includes(t))
+                    .slice(0, 10);
+                return { buttons, inputs, options };
             }
             """
             return await self._page.evaluate(hint_script)
@@ -693,11 +732,27 @@ class BrowserManager:
                         target = item.get("target") or item.get("selector") or ""
                         value = item.get("value") or ""
                         loc = await self._smart_locate(target)
-                        await loc.select_option(value, timeout=timeout)
+                        is_native_select = False
+                        try:
+                            tag_name = await loc.evaluate("el => el.tagName")
+                            is_native_select = (tag_name == "SELECT")
+                        except Exception:
+                            pass
+
+                        if is_native_select:
+                            await loc.select_option(value, timeout=timeout)
+                        else:
+                            # Custom select/combobox (React, Tailwind, Radix):
+                            # Click trigger to open dropdown, then click the option
+                            await loc.click(timeout=timeout)
+                            await asyncio.sleep(0.15)
+                            opt_loc = await self._smart_locate(value)
+                            await opt_loc.click(timeout=timeout)
+
                         dur_ms = int((time.time() - t0) * 1000)
                         desc = f"select \"{target}\" -> \"{value}\""
                         _safe_print(f"{CYAN}│{RESET} {GREEN}[✓]{RESET} {idx+1}. {desc:<50} {DIM}({dur_ms}ms){RESET}")
-                        step_reports.append({"step": idx + 1, "action": "select", "status": "ok", "target": target, "elapsed_ms": dur_ms})
+                        step_reports.append({"step": idx + 1, "action": "select", "status": "ok", "target": target, "value": value, "elapsed_ms": dur_ms})
 
                     elif action_type in ("wait_for", "assert_visible"):
                         target = item.get("target") or item.get("selector") or ""
@@ -772,11 +827,15 @@ class BrowserManager:
                 _safe_print(f"    URL:     {self._page.url if self._page else 'unknown'}")
                 if failure_info.get("page_hints", {}).get("buttons"):
                     _safe_print(f"    Available buttons: {failure_info['page_hints']['buttons']}")
+                if failure_info.get("page_hints", {}).get("options"):
+                    _safe_print(f"    Available options: {failure_info['page_hints']['options']}")
                 _safe_print()
 
                 hint_str = ""
                 if failure_info.get("page_hints", {}).get("buttons"):
                     hint_str = f" Available buttons on page: {failure_info['page_hints']['buttons']}."
+                if failure_info.get("page_hints", {}).get("options"):
+                    hint_str += f" Available options on page: {failure_info['page_hints']['options']}."
                 if failure_info.get("page_hints", {}).get("inputs"):
                     hint_str += f" Available inputs on page: {failure_info['page_hints']['inputs']}."
 
@@ -886,7 +945,13 @@ async def browser_screenshot(full_page: bool = False, selector: Optional[str] = 
 
 @with_error_reporting("browser_actions")
 async def browser_actions(actions: list) -> str:
-    """Execute a batch of sequential browser actions in a single turn with live CLI feedback."""
+    """Execute a batch of sequential browser actions in a single turn with live CLI feedback.
+    Supported actions: goto, fill, fill_form, click, select, wait_for, assert_visible, extract_scoped, screenshot, wait.
+    Tips:
+    - For target elements, you can use text, label, placeholder, role, or CSS selector.
+    - For custom dropdown options, menu items, or modals, prefer plain visible text (e.g. 'Male') rather than tag selectors like 'button:has-text(...)'.
+    - For selecting options in dropdowns, you can use action 'select' with target (the select/dropdown) and value (the desired option), or batch two 'click' actions (click dropdown -> click option).
+    """
     mgr = BrowserManager.get_instance()
     res = await mgr.actions(actions_list=actions)
     return json.dumps(res, indent=2, ensure_ascii=False)
