@@ -79,18 +79,7 @@ def is_chromium_installed() -> bool:
                 has_exe = any(folder.rglob("chrome.exe")) if sys.platform == "win32" else any(folder.rglob("chrome"))
                 if not has_exe:
                     return False
-
-        shell_rev = expected.get("chromium-headless-shell")
-        if shell_rev:
-            shell_folder = browsers_dir / f"chromium_headless_shell-{shell_rev}"
-            if not shell_folder.exists():
-                return False
-            if not (shell_folder / "INSTALLATION_COMPLETE").exists():
-                has_shell = any(shell_folder.rglob("*headless*.exe")) if sys.platform == "win32" else any(shell_folder.rglob("*headless*"))
-                if not has_shell:
-                    return False
-
-        return True
+            return True
 
     # Fallback heuristic if browsers.json was unreadable
     for folder in browsers_dir.glob("chromium-*"):

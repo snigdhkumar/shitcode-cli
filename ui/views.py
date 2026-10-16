@@ -53,8 +53,16 @@ def print_startup_intro():
         pass
 
 
-def print_banner(state: Any, client_version: str = "1.0.0", tools_map: Dict[str, Any] | None = None):
+def print_banner(state: Any, client_version: Optional[str] = None, tools_map: Dict[str, Any] | None = None):
     """Render a modern Gemini-style status banner with dynamic change highlighting."""
+    if client_version is None:
+        client_version = getattr(state, "client_version", None)
+    if client_version is None:
+        try:
+            from core.updater import load_client_version
+            client_version = load_client_version()
+        except Exception:
+            client_version = "1.2.0"
     sys_badge = get_system_badge()
     if tools_map is None:
         for mod_name in ("shitcode", "shitcode_client"):
