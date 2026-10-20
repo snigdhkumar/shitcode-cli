@@ -78,7 +78,7 @@ def execute_update_routine(root_dir: Optional[Path] = None, skip_prompt: bool = 
     if not git_bin or not is_git_dir:
         current_loc = str(base_dir.resolve())
         print(f"\n{RED}[!] Git was not found on this system or this client was not installed via Git clone.{RESET}")
-        print(f"{RED}    Please download the latest client from: https://shitcode.in/shitcode-client.zip{RESET}")
+        print(f"{RED}    Please download the latest client from: https://shitcode.in/shitcode.zip{RESET}")
         print(f"{RED}    and extract (overwrite) into: {current_loc}{RESET}")
         print(f"    {DIM}Note: Your saved 'config.json' and custom 'skills/' will remain intact.{RESET}\n")
         return False
@@ -95,6 +95,18 @@ def execute_update_routine(root_dir: Optional[Path] = None, skip_prompt: bool = 
 
     print(f"\n{BOLD}[*] Starting ShitCode CLI update...{RESET}")
     print(f"[*] Step 1/3: Fetching latest updates from remote repository...")
+
+    # Preserve all existing .env files in skills/ so user API keys are never overwritten
+    skills_dir = base_dir / "skills"
+    existing_skill_envs: dict[Path, str] = {}
+    if skills_dir.is_dir():
+        for env_path in skills_dir.glob("**/.env*"):
+            if env_path.is_file():
+                try:
+                    existing_skill_envs[env_path.resolve()] = env_path.read_text(encoding="utf-8", errors="replace")
+                except Exception:
+                    pass
+
     try:
         res = subprocess.run(
             [git_bin, "fetch", "origin", "main"],
@@ -110,6 +122,19 @@ def execute_update_routine(root_dir: Optional[Path] = None, skip_prompt: bool = 
         print(f"{RED}[!] Git fetch error: {e}{RESET}\n")
         return False
 
+    # If any tracked .env files have local user modifications, temporarily clean them so git pull --ff-only never aborts
+    modified_tracked_envs = []
+    try:
+        status_res = subprocess.run([git_bin, "status", "--porcelain"], cwd=str(base_dir), capture_output=True, text=True, check=False)
+        if status_res.returncode == 0:
+            for line in status_res.stdout.splitlines():
+                if "skills/" in line and ".env" in line:
+                    file_part = line.strip().split()[-1]
+                    modified_tracked_envs.append(file_part)
+                    subprocess.run([git_bin, "checkout", "--", file_part], cwd=str(base_dir), capture_output=True, check=False)
+    except Exception:
+        pass
+
     print(f"[*] Step 2/3: Pulling latest changes into local client...")
     try:
         res = subprocess.run(
@@ -120,12 +145,31 @@ def execute_update_routine(root_dir: Optional[Path] = None, skip_prompt: bool = 
             check=False,
         )
         if res.returncode != 0:
+            # If pull failed, restore user's files immediately
+            for env_path_resolved, saved_content in existing_skill_envs.items():
+                Path(env_path_resolved).write_text(saved_content, encoding="utf-8")
             print(f"{RED}[!] Git pull failed: {res.stderr.strip()}{RESET}")
             print(f"{RED}    If you have local changes, please commit or stash them before updating.{RESET}\n")
             return False
     except Exception as e:
+        for env_path_resolved, saved_content in existing_skill_envs.items():
+            Path(env_path_resolved).write_text(saved_content, encoding="utf-8")
         print(f"{RED}[!] Git pull error: {e}{RESET}\n")
         return False
+
+    # Restore existing .env files (Never Overwrite rule) while keeping any newly downloaded .env files (Download if Missing rule)
+    restored_count = 0
+    for env_path_resolved, saved_content in existing_skill_envs.items():
+        env_path = Path(env_path_resolved)
+        try:
+            env_path.parent.mkdir(parents=True, exist_ok=True)
+            env_path.write_text(saved_content, encoding="utf-8")
+            restored_count += 1
+        except Exception as e:
+            print(f"{YELLOW}[!] Notice: Could not restore {env_path.name}: {e}{RESET}")
+
+    if restored_count > 0:
+        print(f"  {DIM}[✓] Protected {restored_count} custom skill configuration (.env) file(s) from overwrite.{RESET}")
 
     print(f"[*] Step 3/3: Verifying and installing required dependencies...")
     try:
