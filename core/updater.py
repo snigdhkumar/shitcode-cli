@@ -19,17 +19,17 @@ UPDATE_CHECK_URL = "https://raw.githubusercontent.com/snigdhkumar/shitcode-cli/m
 
 
 def load_client_version(root_dir: Optional[Path] = None) -> str:
-    """Load client version from version.json or fallback to 1.0.0."""
+    """Load client version from version.json or fallback to 1.3.0."""
     base_dir = root_dir or ROOT_DIR
     try:
         v_file = base_dir / "version.json"
         if v_file.is_file():
             with open(v_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                return str(data.get("version", "1.0.0")).strip()
+                return str(data.get("version", "1.3.0")).strip()
     except Exception:
         pass
-    return "1.0.0"
+    return "1.3.0"
 
 
 CLIENT_VERSION = load_client_version()

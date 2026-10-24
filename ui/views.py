@@ -62,7 +62,7 @@ def print_banner(state: Any, client_version: Optional[str] = None, tools_map: Di
             from core.updater import load_client_version
             client_version = load_client_version()
         except Exception:
-            client_version = "1.2.0"
+            client_version = "1.3.0"
     sys_badge = get_system_badge()
     if tools_map is None:
         for mod_name in ("shitcode", "shitcode_client"):
