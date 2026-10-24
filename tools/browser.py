@@ -626,8 +626,14 @@ class BrowserManager:
             with open(filepath, "wb") as f:
                 f.write(img_bytes)
 
-            b64_data = base64.b64encode(img_bytes).decode("ascii")
-            mime_type = "image/jpeg" if ext == "jpg" else "image/png"
+            # Optimize screenshot for LLM multimodal vision context (~40-60 KB)
+            try:
+                from tools.media import optimize_image_for_vision
+                opt_bytes, opt_mime, opt_note = optimize_image_for_vision(img_bytes, max_dimension=1280, quality=75)
+            except Exception:
+                opt_bytes, opt_mime, opt_note = img_bytes, ("image/jpeg" if ext == "jpg" else "image/png"), f"{len(img_bytes) // 1024} KB"
+
+            b64_data = base64.b64encode(opt_bytes).decode("ascii")
             page_url = self._page.url if self._page else ""
 
             return {
@@ -637,17 +643,17 @@ class BrowserManager:
                 "size_bytes": len(img_bytes),
                 "url": page_url,
                 "b64_data": b64_data,
-                "mime_type": mime_type,
-                "message": f"Screenshot saved to {filepath.name} ({len(img_bytes) // 1024} KB)",
+                "mime_type": opt_mime,
+                "message": f"Screenshot saved to {filepath.name} ({len(img_bytes) // 1024} KB raw, vision payload: {opt_note})",
                 "content": [
                     {
                         "type": "text",
-                        "text": f"Screenshot captured from {page_url or 'active page'} (saved locally to {filepath.name}, {len(img_bytes) // 1024} KB)."
+                        "text": f"Screenshot captured from {page_url or 'active page'} (saved locally to {filepath.name}, vision payload: {opt_note})."
                     },
                     {
                         "type": "image",
                         "data": b64_data,
-                        "mimeType": mime_type
+                        "mimeType": opt_mime
                     }
                 ]
             }
