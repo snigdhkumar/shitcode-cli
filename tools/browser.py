@@ -14,6 +14,7 @@ Features:
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -426,6 +427,7 @@ class BrowserManager:
             if self._was_installed_on_demand:
                 res["installed_on_demand"] = True
                 res["install_notice"] = "Chromium browser engine was downloaded into shitcode-cli/.browsers/ on demand."
+                res["message"] = f"[Notice: Chromium browser was downloaded on demand for first-time use] {res['message']}"
                 self._was_installed_on_demand = False
             return res
         except Exception as nav_err:
@@ -441,6 +443,7 @@ class BrowserManager:
             }
             if self._was_installed_on_demand:
                 res["installed_on_demand"] = True
+                res["message"] = f"[Notice: Chromium browser was downloaded on demand for first-time use] {res['message']}"
                 self._was_installed_on_demand = False
             return res
 
@@ -623,13 +626,30 @@ class BrowserManager:
             with open(filepath, "wb") as f:
                 f.write(img_bytes)
 
+            b64_data = base64.b64encode(img_bytes).decode("ascii")
+            mime_type = "image/jpeg" if ext == "jpg" else "image/png"
+            page_url = self._page.url if self._page else ""
+
             return {
                 "success": True,
                 "filename": filename,
                 "path": str(filepath),
                 "size_bytes": len(img_bytes),
-                "url": self._page.url if self._page else "",
+                "url": page_url,
+                "b64_data": b64_data,
+                "mime_type": mime_type,
                 "message": f"Screenshot saved to {filepath.name} ({len(img_bytes) // 1024} KB)",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": f"Screenshot captured from {page_url or 'active page'} (saved locally to {filepath.name}, {len(img_bytes) // 1024} KB)."
+                    },
+                    {
+                        "type": "image",
+                        "data": b64_data,
+                        "mimeType": mime_type
+                    }
+                ]
             }
         except Exception as e:
             return {"success": False, "error": f"Failed to take screenshot: {e}"}
@@ -670,6 +690,7 @@ class BrowserManager:
 
             failed_step_idx = None
             failure_info = None
+            last_screenshot: Optional[Dict[str, Any]] = None
 
             for idx, item in enumerate(actions_list):
                 if not isinstance(item, dict):
@@ -784,6 +805,8 @@ class BrowserManager:
 
                     elif action_type == "screenshot":
                         res = await self._screenshot_internal()
+                        if res.get("success"):
+                            last_screenshot = res
                         dur_ms = int((time.time() - t0) * 1000)
                         desc = f"screenshot ({res.get('filename')})"
                         _safe_print(f"{CYAN}│{RESET} {GREEN}[✓]{RESET} {idx+1}. {desc:<50} {DIM}({dur_ms}ms){RESET}")
@@ -868,6 +891,8 @@ class BrowserManager:
             }
             if extracted_data:
                 res_dict["extracted"] = extracted_data
+            if last_screenshot and "content" in last_screenshot:
+                res_dict["content"] = last_screenshot["content"]
             return res_dict
 
     async def close(self) -> Dict[str, Any]:
@@ -936,15 +961,17 @@ async def browser_extract(format: str = "markdown", selector: Optional[str] = No
 
 
 @with_error_reporting("browser_screenshot")
-async def browser_screenshot(full_page: bool = False, selector: Optional[str] = None, format: str = "png") -> str:
-    """Capture a screenshot of the active web page."""
+async def browser_screenshot(full_page: bool = False, selector: Optional[str] = None, format: str = "png") -> Any:
+    """Capture a screenshot of the active web page and return multimodal image blocks directly to AI."""
     mgr = BrowserManager.get_instance()
     res = await mgr.screenshot(full_page=full_page, selector=selector, format=format)
+    if res.get("success") and "content" in res:
+        return res
     return json.dumps(res, indent=2, ensure_ascii=False)
 
 
 @with_error_reporting("browser_actions")
-async def browser_actions(actions: list) -> str:
+async def browser_actions(actions: list) -> Any:
     """Execute a batch of sequential browser actions in a single turn with live CLI feedback.
     Supported actions: goto, fill, fill_form, click, select, wait_for, assert_visible, extract_scoped, screenshot, wait.
     Tips:
@@ -954,6 +981,8 @@ async def browser_actions(actions: list) -> str:
     """
     mgr = BrowserManager.get_instance()
     res = await mgr.actions(actions_list=actions)
+    if res.get("success") and "content" in res:
+        return res
     return json.dumps(res, indent=2, ensure_ascii=False)
 
 

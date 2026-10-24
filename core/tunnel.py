@@ -267,8 +267,10 @@ async def run_client_loop(
                         t_start = time.perf_counter()
                         try:
                             output = await execute_tool(tool_name, arguments)
-                            elapsed_ms = int((time.perf_counter() - t_start) * 1000)
-                            print(f"         {GREEN}[+] Completed in {elapsed_ms}ms{RESET} {DIM}(Returned result to AI){RESET}")
+                            if isinstance(output, dict) and "content" in output:
+                                print(f"         {GREEN}[+] Completed in {elapsed_ms}ms{RESET} {CYAN}(Returned visual image payload to AI){RESET}")
+                            else:
+                                print(f"         {GREEN}[+] Completed in {elapsed_ms}ms{RESET} {DIM}(Returned result to AI){RESET}")
 
                             response = {
                                 "type": "tool_result",

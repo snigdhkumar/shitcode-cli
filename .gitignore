@@ -27,3 +27,7 @@ backup/
 .browsers/
 .browser_profile/
 screenshots/
+
+# Self-contained FFmpeg engine & temporary frames
+.bin/
+temp/

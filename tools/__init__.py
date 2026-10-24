@@ -22,6 +22,7 @@ from tools.browser import (
     browser_actions,
     browser_close,
 )
+from tools.media import image_inspect, video_inspect
 
 if TYPE_CHECKING:
     from mcp.server.mcpserver import MCPServer
@@ -59,6 +60,9 @@ ALL_TOOLS: List[Callable[..., Any]] = [
     browser_screenshot,
     browser_actions,
     browser_close,
+    # Multimodal Vision & Video Engine
+    image_inspect,
+    video_inspect,
 ]
 
 
