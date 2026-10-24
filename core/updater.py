@@ -145,12 +145,46 @@ def execute_update_routine(root_dir: Optional[Path] = None, skip_prompt: bool = 
             check=False,
         )
         if res.returncode != 0:
-            # If pull failed, restore user's files immediately
-            for env_path_resolved, saved_content in existing_skill_envs.items():
-                Path(env_path_resolved).write_text(saved_content, encoding="utf-8")
-            print(f"{RED}[!] Git pull failed: {res.stderr.strip()}{RESET}")
-            print(f"{RED}    If you have local changes, please commit or stash them before updating.{RESET}\n")
-            return False
+            err_text = res.stderr.strip()
+            # Auto-healing fallback: if pull failed because untracked local files collide with incoming
+            # official tracked files, or local modifications conflict, auto-heal cleanly.
+            # In-memory snapshot (existing_skill_envs) and config.json are 100% protected.
+            print(f"  {DIM}[*] Resolving local file synchronization with official release...{RESET}")
+            
+            # 1. Clear any untracked files colliding with incoming release
+            capture_untracked = False
+            for line in res.stderr.splitlines():
+                if "untracked working tree files would be overwritten" in line:
+                    capture_untracked = True
+                    continue
+                if capture_untracked:
+                    if "Please move or remove" in line or "Aborting" in line:
+                        break
+                    file_name = line.strip()
+                    if file_name:
+                        colliding_file = base_dir / file_name
+                        if colliding_file.is_file():
+                            try:
+                                colliding_file.unlink()
+                            except Exception:
+                                pass
+
+            # 2. Align working tree cleanly to latest official release
+            res_heal = subprocess.run(
+                [git_bin, "reset", "--hard", "origin/main"],
+                cwd=str(base_dir),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if res_heal.returncode != 0:
+                for env_path_resolved, saved_content in existing_skill_envs.items():
+                    Path(env_path_resolved).write_text(saved_content, encoding="utf-8")
+                print(f"{RED}[!] Git update failed: {res_heal.stderr.strip() or err_text}{RESET}")
+                print(f"{RED}    Please try running 'update' again or re-download from https://shitcode.in/shitcode.zip{RESET}\n")
+                return False
+
+            print(f"  {DIM}[✓] Local client synchronized cleanly with origin/main.{RESET}")
     except Exception as e:
         for env_path_resolved, saved_content in existing_skill_envs.items():
             Path(env_path_resolved).write_text(saved_content, encoding="utf-8")
