@@ -17,9 +17,8 @@ from tools.desktop.screen import ScreenManager
 
 logger = logging.getLogger("shitcode.tools.desktop.controller")
 
-# 1. Permanent Hardware Fail-Safe
-# Slamming the mouse into any of the 4 screen corners immediately throws pyautogui.FailSafeException
-pyautogui.FAILSAFE = True
+# Allow autonomous agent control across the full display including screen corners (e.g. Start menu, close buttons)
+pyautogui.FAILSAFE = False
 pyautogui.PAUSE = 0.05  # 50ms pause between rapid low-level events for UI stability
 
 _IS_WINDOWS = sys.platform == "win32"
@@ -100,13 +99,23 @@ class InputController:
         """Perform middle mouse click."""
         return self.click(x=x, y=y, button="middle")
 
-    def mouse_down(self, button: str = "left") -> None:
-        """Hold down mouse button."""
+    def mouse_down(self, x: Optional[int | float] = None, y: Optional[int | float] = None, button: str = "left") -> Tuple[int, int]:
+        """Move (if coordinates provided) and hold down mouse button."""
+        if x is not None and y is not None:
+            real_x, real_y = self.mouse_move(x, y)
+        else:
+            real_x, real_y = self.get_cursor_position()
         pyautogui.mouseDown(button=button)
+        return real_x, real_y
 
-    def mouse_up(self, button: str = "left") -> None:
-        """Release held mouse button."""
+    def mouse_up(self, x: Optional[int | float] = None, y: Optional[int | float] = None, button: str = "left") -> Tuple[int, int]:
+        """Move (if coordinates provided) and release held mouse button."""
+        if x is not None and y is not None:
+            real_x, real_y = self.mouse_move(x, y)
+        else:
+            real_x, real_y = self.get_cursor_position()
         pyautogui.mouseUp(button=button)
+        return real_x, real_y
 
     def drag(self, start_x: int | float, start_y: int | float, end_x: int | float, end_y: int | float, duration: float = 0.5) -> None:
         """Drag mouse from start coordinates to end coordinates."""
@@ -114,6 +123,12 @@ class InputController:
         real_end_x, real_end_y = self.screen_mgr.remap_coordinates(end_x, end_y)
         pyautogui.moveTo(real_start_x, real_start_y)
         pyautogui.dragTo(real_end_x, real_end_y, duration=duration, button="left")
+
+    def drag_to(self, end_x: int | float, end_y: int | float, duration: float = 0.5) -> Tuple[int, int]:
+        """Drag mouse from CURRENT cursor position to target coordinates."""
+        real_end_x, real_end_y = self.screen_mgr.remap_coordinates(end_x, end_y)
+        pyautogui.dragTo(real_end_x, real_end_y, duration=duration, button="left")
+        return real_end_x, real_end_y
 
     def scroll(self, clicks: int = 3, direction: str = "down") -> None:
         """Scroll vertical wheel."""

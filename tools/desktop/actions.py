@@ -127,12 +127,12 @@ async def computer(
         return f"Middle-clicked at ({real_x}, {real_y})."
 
     elif act == "mouse_down":
-        ctrl.mouse_down()
-        return "Mouse button held down."
+        real_x, real_y = ctrl.mouse_down(x=x, y=y)
+        return f"Mouse button held down at ({real_x}, {real_y})."
 
     elif act == "mouse_up":
-        ctrl.mouse_up()
-        return "Mouse button released."
+        real_x, real_y = ctrl.mouse_up(x=x, y=y)
+        return f"Mouse button released at ({real_x}, {real_y})."
 
     elif act == "type":
         if not text:
@@ -162,8 +162,7 @@ async def computer(
             x1, y1, x2, y2 = coordinate[0], coordinate[1], coordinate[2], coordinate[3]
             ctrl.drag(x1, y1, x2, y2)
         elif x is not None and y is not None:
-            cur_x, cur_y = ctrl.get_cursor_position()
-            ctrl.drag(cur_x, cur_y, x, y)
+            ctrl.drag_to(x, y)
         else:
             return "Error: 'coordinate' with target [x, y] required for drag action."
         shot = await asyncio.to_thread(screen_mgr.capture_screenshot)
@@ -261,6 +260,15 @@ async def computer_actions(actions: list) -> Any:
                 _safe_print(f"{CYAN}│{RESET} {GREEN}[✓]{RESET} {idx+1}. {desc:<50} {DIM}({dur_ms}ms){RESET}")
                 step_reports.append({"step": idx + 1, "action": "double_click", "status": "ok", "x": rx, "y": ry, "elapsed_ms": dur_ms})
 
+            elif action_type == "triple_click":
+                coord = item.get("coordinate") or item.get("target")
+                x, y = (coord[0], coord[1]) if (coord and len(coord) >= 2) else (None, None)
+                rx, ry = ctrl.triple_click(x=x, y=y)
+                dur_ms = int((time.time() - t0) * 1000)
+                desc = f"triple_click ({rx}, {ry})"
+                _safe_print(f"{CYAN}│{RESET} {GREEN}[✓]{RESET} {idx+1}. {desc:<50} {DIM}({dur_ms}ms){RESET}")
+                step_reports.append({"step": idx + 1, "action": "triple_click", "status": "ok", "x": rx, "y": ry, "elapsed_ms": dur_ms})
+
             elif action_type == "right_click":
                 coord = item.get("coordinate") or item.get("target")
                 x, y = (coord[0], coord[1]) if (coord and len(coord) >= 2) else (None, None)
@@ -269,6 +277,67 @@ async def computer_actions(actions: list) -> Any:
                 desc = f"right_click ({rx}, {ry})"
                 _safe_print(f"{CYAN}│{RESET} {GREEN}[✓]{RESET} {idx+1}. {desc:<50} {DIM}({dur_ms}ms){RESET}")
                 step_reports.append({"step": idx + 1, "action": "right_click", "status": "ok", "x": rx, "y": ry, "elapsed_ms": dur_ms})
+
+            elif action_type == "middle_click":
+                coord = item.get("coordinate") or item.get("target")
+                x, y = (coord[0], coord[1]) if (coord and len(coord) >= 2) else (None, None)
+                rx, ry = ctrl.middle_click(x=x, y=y)
+                dur_ms = int((time.time() - t0) * 1000)
+                desc = f"middle_click ({rx}, {ry})"
+                _safe_print(f"{CYAN}│{RESET} {GREEN}[✓]{RESET} {idx+1}. {desc:<50} {DIM}({dur_ms}ms){RESET}")
+                step_reports.append({"step": idx + 1, "action": "middle_click", "status": "ok", "x": rx, "y": ry, "elapsed_ms": dur_ms})
+
+            elif action_type in ("mouse_move", "move"):
+                coord = item.get("coordinate") or item.get("target")
+                if not coord or len(coord) < 2:
+                    raise ValueError("Action 'mouse_move' requires 'coordinate': [x, y]")
+                rx, ry = ctrl.mouse_move(coord[0], coord[1])
+                dur_ms = int((time.time() - t0) * 1000)
+                desc = f"mouse_move ({rx}, {ry})"
+                _safe_print(f"{CYAN}│{RESET} {GREEN}[✓]{RESET} {idx+1}. {desc:<50} {DIM}({dur_ms}ms){RESET}")
+                step_reports.append({"step": idx + 1, "action": "mouse_move", "status": "ok", "x": rx, "y": ry, "elapsed_ms": dur_ms})
+
+            elif action_type == "mouse_down":
+                coord = item.get("coordinate") or item.get("target")
+                x, y = (coord[0], coord[1]) if (coord and len(coord) >= 2) else (None, None)
+                button = str(item.get("button", "left"))
+                rx, ry = ctrl.mouse_down(x=x, y=y, button=button)
+                dur_ms = int((time.time() - t0) * 1000)
+                desc = f"mouse_down {button} ({rx}, {ry})"
+                _safe_print(f"{CYAN}│{RESET} {GREEN}[✓]{RESET} {idx+1}. {desc:<50} {DIM}({dur_ms}ms){RESET}")
+                step_reports.append({"step": idx + 1, "action": "mouse_down", "status": "ok", "x": rx, "y": ry, "button": button, "elapsed_ms": dur_ms})
+
+            elif action_type == "mouse_up":
+                coord = item.get("coordinate") or item.get("target")
+                x, y = (coord[0], coord[1]) if (coord and len(coord) >= 2) else (None, None)
+                button = str(item.get("button", "left"))
+                rx, ry = ctrl.mouse_up(x=x, y=y, button=button)
+                dur_ms = int((time.time() - t0) * 1000)
+                desc = f"mouse_up {button} ({rx}, {ry})"
+                _safe_print(f"{CYAN}│{RESET} {GREEN}[✓]{RESET} {idx+1}. {desc:<50} {DIM}({dur_ms}ms){RESET}")
+                step_reports.append({"step": idx + 1, "action": "mouse_up", "status": "ok", "x": rx, "y": ry, "button": button, "elapsed_ms": dur_ms})
+
+            elif action_type in ("left_click_drag", "drag"):
+                coord = item.get("coordinate") or item.get("target")
+                start = item.get("start")
+                end = item.get("end")
+                duration = float(item.get("duration", 0.5))
+
+                if coord and len(coord) >= 4:
+                    ctrl.drag(coord[0], coord[1], coord[2], coord[3], duration=duration)
+                    desc = f"drag [{coord[0]},{coord[1]}] -> [{coord[2]},{coord[3]}]"
+                elif start and end:
+                    ctrl.drag(start[0], start[1], end[0], end[1], duration=duration)
+                    desc = f"drag {start} -> {end}"
+                elif coord and len(coord) >= 2:
+                    rx, ry = ctrl.drag_to(coord[0], coord[1], duration=duration)
+                    desc = f"drag_to ({rx}, {ry})"
+                else:
+                    raise ValueError("Action 'left_click_drag' requires destination 'coordinate': [x, y] or [start_x, start_y, end_x, end_y]")
+
+                dur_ms = int((time.time() - t0) * 1000)
+                _safe_print(f"{CYAN}│{RESET} {GREEN}[✓]{RESET} {idx+1}. {desc:<50} {DIM}({dur_ms}ms){RESET}")
+                step_reports.append({"step": idx + 1, "action": "left_click_drag", "status": "ok", "elapsed_ms": dur_ms})
 
             elif action_type in ("type", "fill"):
                 val = str(item.get("text") or item.get("value") or "")
@@ -279,7 +348,7 @@ async def computer_actions(actions: list) -> Any:
                 _safe_print(f"{CYAN}│{RESET} {GREEN}[✓]{RESET} {idx+1}. {desc:<50} {DIM}({dur_ms}ms){RESET}")
                 step_reports.append({"step": idx + 1, "action": "type", "status": "ok", "text": val, "elapsed_ms": dur_ms})
 
-            elif action_type == "key":
+            elif action_type in ("key", "hotkey"):
                 key_str = str(item.get("key") or item.get("text") or "Return")
                 keys = key_str.replace("+", " ").split()
                 if len(keys) > 1:
@@ -291,18 +360,28 @@ async def computer_actions(actions: list) -> Any:
                 _safe_print(f"{CYAN}│{RESET} {GREEN}[✓]{RESET} {idx+1}. {desc:<50} {DIM}({dur_ms}ms){RESET}")
                 step_reports.append({"step": idx + 1, "action": "key", "status": "ok", "key": key_str, "elapsed_ms": dur_ms})
 
-            elif action_type == "drag":
-                start = item.get("start") or [0, 0]
-                end = item.get("end") or [0, 0]
-                ctrl.drag(start[0], start[1], end[0], end[1], duration=float(item.get("duration", 0.5)))
+            elif action_type == "press_enter":
+                ctrl.press_key("Return")
                 dur_ms = int((time.time() - t0) * 1000)
-                desc = f"drag {start} -> {end}"
+                desc = "press_enter"
                 _safe_print(f"{CYAN}│{RESET} {GREEN}[✓]{RESET} {idx+1}. {desc:<50} {DIM}({dur_ms}ms){RESET}")
-                step_reports.append({"step": idx + 1, "action": "drag", "status": "ok", "elapsed_ms": dur_ms})
+                step_reports.append({"step": idx + 1, "action": "press_enter", "status": "ok", "elapsed_ms": dur_ms})
 
             elif action_type == "scroll":
-                clicks = int(item.get("clicks", 3))
-                direction = str(item.get("direction", "down"))
+                clicks = 3
+                direction = "down"
+                raw_val = item.get("scroll") or item.get("clicks") or item.get("text")
+                if raw_val is not None:
+                    try:
+                        val = int(raw_val)
+                        clicks = abs(val)
+                        direction = "up" if val > 0 else "down"
+                    except (ValueError, TypeError):
+                        direction = "up" if "up" in str(raw_val).lower() else "down"
+                else:
+                    direction = str(item.get("direction", "down")).lower()
+                    clicks = int(item.get("clicks", 3))
+
                 ctrl.scroll(clicks=clicks, direction=direction)
                 dur_ms = int((time.time() - t0) * 1000)
                 desc = f"scroll {direction} ({clicks} clicks)"
@@ -310,7 +389,7 @@ async def computer_actions(actions: list) -> Any:
                 step_reports.append({"step": idx + 1, "action": "scroll", "status": "ok", "elapsed_ms": dur_ms})
 
             elif action_type in ("wait", "sleep"):
-                ms = int(item.get("ms", 500))
+                ms = int(item.get("ms") or item.get("text") or 500)
                 time.sleep(ms / 1000.0)
                 desc = f"wait {ms}ms"
                 _safe_print(f"{CYAN}│{RESET} {GREEN}[✓]{RESET} {idx+1}. {desc:<50} {DIM}({ms}ms){RESET}")
@@ -323,6 +402,13 @@ async def computer_actions(actions: list) -> Any:
                 desc = f"screenshot ({shot.get('filename')})"
                 _safe_print(f"{CYAN}│{RESET} {GREEN}[✓]{RESET} {idx+1}. {desc:<50} {DIM}({dur_ms}ms){RESET}")
                 step_reports.append({"step": idx + 1, "action": "screenshot", "status": "ok", "path": shot.get("path"), "elapsed_ms": dur_ms})
+
+            elif action_type == "cursor_position":
+                cx, cy = ctrl.get_cursor_position()
+                dur_ms = int((time.time() - t0) * 1000)
+                desc = f"cursor_position ({cx}, {cy})"
+                _safe_print(f"{CYAN}│{RESET} {GREEN}[✓]{RESET} {idx+1}. {desc:<50} {DIM}({dur_ms}ms){RESET}")
+                step_reports.append({"step": idx + 1, "action": "cursor_position", "status": "ok", "x": cx, "y": cy, "elapsed_ms": dur_ms})
 
             else:
                 raise ValueError(f"Unknown desktop action: '{action_type}'")
