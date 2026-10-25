@@ -33,55 +33,132 @@ from ui.theme import BOLD, CYAN, DIM, GREEN, ORANGE, RED, RESET, YELLOW
 from ui.views import print_banner, print_invalid_token_card
 
 
+def format_ai_request(tool_name: str, arguments: Dict[str, Any], t_stamp: str, expanded: bool = False) -> str:
+    """Format an incoming AI tool request in compact (truncated) or enlarged (full) view."""
+    if not expanded:
+        args_preview = json.dumps(arguments, ensure_ascii=False)
+        if len(args_preview) > 90:
+            args_preview = args_preview[:87] + "..."
+        lines = [
+            f"\n{CYAN}[{t_stamp}]{RESET} {BOLD}╭─ AI Request:{RESET} {ORANGE}{tool_name}{RESET} {DIM}──────────────────────────────────╮{RESET}",
+            f"         {DIM}│ Args: {args_preview}{RESET}",
+            f"         {DIM}│ {DIM}(Press {BOLD}Ctrl+O{RESET}{DIM} to enlarge request){RESET}",
+            f"         {DIM}╰────────────────────────────────────────────────────────╯{RESET}"
+        ]
+        return "\n".join(lines)
+
+    # Enlarged view
+    header = f"\n{CYAN}[{t_stamp}]{RESET} {BOLD}╭─ AI Request (Enlarged):{RESET} {ORANGE}{tool_name}{RESET} {DIM}────────────────────────╮{RESET}"
+    footer = f"         {DIM}╰────────────────────────────────────────────────────────╯{RESET}"
+    body_lines = []
+
+    if not arguments:
+        body_lines.append(f"         {DIM}│ Arguments: (none){RESET}")
+    else:
+        body_lines.append(f"         {DIM}│ Full Arguments:{RESET}")
+        for k, v in arguments.items():
+            if isinstance(v, str) and "\n" in v:
+                body_lines.append(f"         {DIM}│   {CYAN}• {k}:{RESET}")
+                for subline in v.splitlines():
+                    disp_sub = subline if len(subline) <= 120 else subline[:117] + "..."
+                    body_lines.append(f"         {DIM}│       {disp_sub}{RESET}")
+            else:
+                v_str = json.dumps(v, ensure_ascii=False) if not isinstance(v, str) else f'"{v}"'
+                if len(v_str) > 300:
+                    v_str = v_str[:297] + '..."'
+                body_lines.append(f"         {DIM}│   {CYAN}• {k}:{RESET} {v_str}")
+
+    body_lines.append(f"         {DIM}│ {DIM}(Press {BOLD}Ctrl+O{RESET}{DIM} to minimize request){RESET}")
+    return header + "\n" + "\n".join(body_lines) + "\n" + footer
+
+
 async def confirm_tool_execution(tool_name: str, arguments: Dict[str, Any], state: ClientState) -> str:
     """Prompt user in CLI for confirmation before running actions via single stdin reader."""
     state.is_prompting_permission = True
-    snippet = ""
-    if "command" in arguments:
-        snippet = arguments["command"]
-    elif "path" in arguments:
-        snippet = arguments["path"]
-    elif "code" in arguments:
-        snippet = arguments["code"].splitlines()[0] if arguments["code"].splitlines() else "Python code"
-    elif "url" in arguments:
-        snippet = arguments["url"]
-    elif "selector" in arguments:
-        snippet = f"{arguments['selector']}" + (f" -> '{arguments['text']}'" if "text" in arguments else "")
-    else:
-        snippet = json.dumps(arguments, ensure_ascii=False)
 
-    if len(snippet) > 80:
-        snippet = snippet[:77] + "..."
+    try:
+        while state.is_running:
+            expanded = getattr(state, "expanded_request_view", False)
 
-    prompt_box = f"""
+            if not expanded:
+                snippet = ""
+                if "command" in arguments:
+                    snippet = arguments["command"]
+                elif "path" in arguments:
+                    snippet = arguments["path"]
+                elif "code" in arguments:
+                    snippet = arguments["code"].splitlines()[0] if arguments["code"].splitlines() else "Python code"
+                elif "url" in arguments:
+                    snippet = arguments["url"]
+                elif "selector" in arguments:
+                    snippet = f"{arguments['selector']}" + (f" -> '{arguments['text']}'" if "text" in arguments else "")
+                else:
+                    snippet = json.dumps(arguments, ensure_ascii=False)
+
+                if len(snippet) > 80:
+                    snippet = snippet[:77] + "..."
+
+                prompt_box = f"""
   {YELLOW}╭─ [Permission Request] AI wants to run tool: {BOLD}{tool_name}{RESET}{YELLOW} ─╮{RESET}
   {YELLOW}│{RESET} Target: {snippet:<60} {YELLOW}│{RESET}
+  {YELLOW}│{RESET} {DIM}(Press {BOLD}Ctrl+O{RESET}{DIM} to enlarge request view){RESET} {YELLOW}│{RESET}
+  {YELLOW}╰─────────────────────────────────────────────────────────────────╯{RESET}
+  {BOLD}Allow this action? [Y/n/always/quit]:{RESET} """
+            else:
+                args_lines = []
+                for k, v in arguments.items():
+                    if isinstance(v, str) and "\n" in v:
+                        args_lines.append(f"  {YELLOW}│{RESET}   {CYAN}• {k}:{RESET}")
+                        for sl in v.splitlines():
+                            disp_sl = sl if len(sl) <= 100 else sl[:97] + "..."
+                            args_lines.append(f"  {YELLOW}│{RESET}       {disp_sl}")
+                    else:
+                        v_str = json.dumps(v, ensure_ascii=False) if not isinstance(v, str) else f'"{v}"'
+                        if len(v_str) > 200:
+                            v_str = v_str[:197] + '..."'
+                        args_lines.append(f"  {YELLOW}│{RESET}   {CYAN}• {k}:{RESET} {v_str}")
+
+                args_body = "\n".join(args_lines) if args_lines else f"  {YELLOW}│{RESET}   (no arguments)"
+                prompt_box = f"""
+  {YELLOW}╭─ [Permission Request: Enlarged] AI wants to run: {BOLD}{tool_name}{RESET}{YELLOW} ─╮{RESET}
+  {YELLOW}│{RESET} Full Arguments:
+{args_body}
+  {YELLOW}│{RESET} {DIM}(Press {BOLD}Ctrl+O{RESET}{DIM} to minimize request view){RESET}
   {YELLOW}╰─────────────────────────────────────────────────────────────────╯{RESET}
   {BOLD}Allow this action? [Y/n/always/quit]:{RESET} """
 
-    print(prompt_box, end="", flush=True)
+            print(prompt_box, end="", flush=True)
 
-    loop = asyncio.get_running_loop()
-    fut = loop.create_future()
-    state.pending_perm_future = fut
+            loop = asyncio.get_running_loop()
+            fut = loop.create_future()
+            state.pending_perm_future = fut
 
-    try:
-        user_choice = await fut
-        choice = user_choice.strip().lower()
-    except Exception:
-        choice = "n"
+            try:
+                user_choice = await fut
+                choice = user_choice.strip().lower()
+            except Exception:
+                choice = "n"
+            finally:
+                state.pending_perm_future = None
+
+            if choice in ("__ctrl_o__", "ctrl+o", "o"):
+                state.expanded_request_view = not getattr(state, "expanded_request_view", False)
+                mode_lbl = "ENLARGED" if state.expanded_request_view else "COMPACT"
+                print(f"\n  {GREEN}● Switched permission view to: {BOLD}{mode_lbl}{RESET}")
+                continue
+
+            if choice in ("y", "yes", ""):
+                return "allow"
+            elif choice in ("a", "always"):
+                return "always"
+            elif choice in ("q", "quit", "exit"):
+                return "quit"
+            else:
+                return "deny"
     finally:
-        state.pending_perm_future = None
         state.is_prompting_permission = False
 
-    if choice in ("y", "yes", ""):
-        return "allow"
-    elif choice in ("a", "always"):
-        return "always"
-    elif choice in ("q", "quit", "exit"):
-        return "quit"
-    else:
-        return "deny"
+    return "deny"
 
 
 async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> Any:
@@ -236,14 +313,12 @@ async def run_client_loop(
                         arguments = data.get("arguments", {})
 
                         t_stamp = datetime.now().strftime("%H:%M:%S")
-
-                        args_preview = json.dumps(arguments, ensure_ascii=False)
-                        if len(args_preview) > 90:
-                            args_preview = args_preview[:87] + "..."
-
-                        print(f"\n{CYAN}[{t_stamp}]{RESET} {BOLD}╭─ AI Request:{RESET} {ORANGE}{tool_name}{RESET} {DIM}──────────────────────────────────╮{RESET}")
-                        print(f"         {DIM}│ Args: {args_preview}{RESET}")
-                        print(f"         {DIM}╰────────────────────────────────────────────────────────╯{RESET}")
+                        state.last_ai_request = {
+                            "tool": tool_name,
+                            "arguments": arguments,
+                            "time": t_stamp,
+                        }
+                        print(format_ai_request(tool_name, arguments, t_stamp, expanded=getattr(state, "expanded_request_view", False)))
 
                         if state.ask_permission:
                             perm_result = await confirm_tool_execution(tool_name, arguments, state)

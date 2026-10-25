@@ -55,6 +55,7 @@ def handle_interactive_help():
 {ORANGE}│{RESET}  {BOLD}update [-y]{RESET}      {DIM}Update ShitCode CLI to the latest version via Git    {RESET}{ORANGE}│{RESET}
 {ORANGE}│{RESET}  {BOLD}workspace <path>{RESET} {DIM}Switch project folder live without restarting        {RESET}{ORANGE}│{RESET}
 {ORANGE}│{RESET}  {BOLD}perm{RESET}             {DIM}Toggle between Auto-Approve & Interactive Approval    {RESET}{ORANGE}│{RESET}
+{ORANGE}│{RESET}  {BOLD}expand / Ctrl+O{RESET}  {DIM}Toggle Enlarged/Compact AI request details            {RESET}{ORANGE}│{RESET}
 {ORANGE}│{RESET}  {BOLD}browser <cmd>{RESET}    {DIM}Browser automation (open, close, status, install)    {RESET}{ORANGE}│{RESET}
 {ORANGE}│{RESET}  {BOLD}status{RESET}           {DIM}View live connection uptime, session ID, & ping      {RESET}{ORANGE}│{RESET}
 {ORANGE}│{RESET}  {BOLD}tools{RESET}            {DIM}List all available tools & dynamic descriptions       {RESET}{ORANGE}│{RESET}
@@ -81,6 +82,7 @@ def handle_interactive_status(state: Any, tools_map: Optional[Dict[str, Any]] = 
     session_id = getattr(state, "session_id", "unknown")
     workspace_dir = getattr(state, "workspace_dir", ".")
     ask_perm = getattr(state, "ask_permission", False)
+    req_view = "Enlarged (Ctrl+O)" if getattr(state, "expanded_request_view", False) else "Compact (Ctrl+O to enlarge)"
 
     print(f"""
 {CYAN}╭─ Client Status ────────────────────────────────────────────────────────╮{RESET}
@@ -88,6 +90,7 @@ def handle_interactive_status(state: Any, tools_map: Optional[Dict[str, Any]] = 
 {CYAN}│{RESET}  Session ID:   {session_id:<55}{CYAN}│{RESET}
 {CYAN}│{RESET}  Workspace:    {workspace_dir:<55}{CYAN}│{RESET}
 {CYAN}│{RESET}  Security:     {"Interactive Approval" if ask_perm else "Auto-Approve":<55}{CYAN}│{RESET}
+{CYAN}│{RESET}  Request View: {req_view:<55}{CYAN}│{RESET}
 {CYAN}│{RESET}  Uptime:       {uptime_str:<55}{CYAN}│{RESET}
 {CYAN}│{RESET}  Active Tools: {len(active_tools):<55}{CYAN}│{RESET}
 {CYAN}╰────────────────────────────────────────────────────────────────────────╯{RESET}
@@ -255,6 +258,18 @@ def process_command(cmd_raw: str, state: Any, tools_map: Optional[Dict[str, Any]
 
     elif action in ("tools", "/tools"):
         handle_interactive_tools(tools_map=tools_map)
+
+    elif action in ("expand", "/expand", "verbose", "view", "toggle", "ctrl+o"):
+        state.expanded_request_view = not getattr(state, "expanded_request_view", False)
+        mode_str = "ENLARGED (Full parameters shown)" if state.expanded_request_view else "COMPACT (Truncated previews)"
+        mode_color = GREEN if state.expanded_request_view else YELLOW
+        print(f"\n  {mode_color}● AI Request View: {BOLD}{mode_str}{RESET}")
+        print(f"    {DIM}Press {BOLD}Ctrl+O{RESET}{DIM} to toggle anytime.{RESET}")
+        if getattr(state, "last_ai_request", None):
+            from core.tunnel import format_ai_request
+            last = state.last_ai_request
+            print(format_ai_request(last["tool"], last["arguments"], last["time"], expanded=state.expanded_request_view))
+        print()
 
     elif action in ("clear", "cls", "/clear", "esc", "escape"):
         clear_screen()

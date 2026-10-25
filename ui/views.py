@@ -121,7 +121,7 @@ def print_banner(state: Any, client_version: Optional[str] = None, tools_map: Di
   {sec_label}  {perm_badge}
   {ORANGE}●{RESET} {BOLD}Tools:{RESET}     {len(tools)} tools active {DIM}({tool_cats}){RESET}{update_notice}
 {DIM}──────────────────────────────────────────────────────────────────────────{RESET}
-  {DIM}Type {BOLD}'help'{RESET}{DIM} for commands | {BOLD}'update'{RESET}{DIM} to upgrade | {BOLD}Ctrl+C{RESET}{DIM} to quit.{RESET}
+  {DIM}Type {BOLD}'help'{RESET}{DIM} for commands | {BOLD}Ctrl+O{RESET}{DIM} to enlarge view | {BOLD}Ctrl+C{RESET}{DIM} to quit.{RESET}
 """
     print(banner)
 

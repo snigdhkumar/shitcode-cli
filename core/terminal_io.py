@@ -138,6 +138,10 @@ def read_console_line(state: Any) -> tuple[str, bool]:
                         buf.extend(list(clean_paste))
                         sys.stdout.write(clean_paste)
                         sys.stdout.flush()
+                elif ch == "\x0f":  # Ctrl+O (toggle enlarged AI request view)
+                    sys.stdout.write("\n")
+                    sys.stdout.flush()
+                    return ("__CTRL_O__", False)
                 elif ch == "\x03":  # Ctrl+C
                     raise KeyboardInterrupt
                 elif ch in ("\x00", "\xe0"):  # Extended key prefix (arrows, function keys)
@@ -193,6 +197,10 @@ def read_console_line(state: Any) -> tuple[str, bool]:
                             buf.extend(list(clean_paste))
                             sys.stdout.write(clean_paste)
                             sys.stdout.flush()
+                    elif ch == "\x0f":  # Ctrl+O (toggle enlarged AI request view)
+                        sys.stdout.write("\n")
+                        sys.stdout.flush()
+                        return ("__CTRL_O__", False)
                     elif ch == "\x03":  # Ctrl+C
                         raise KeyboardInterrupt
                     elif ch.isprintable():
@@ -211,6 +219,8 @@ def read_console_line(state: Any) -> tuple[str, bool]:
             raw = line.strip()
             if raw == "\x1b" or raw.lower() in ("esc", "escape"):
                 return ("", True)
+            if raw in ("\x0f", "__CTRL_O__", "ctrl+o", "expand"):
+                return ("__CTRL_O__", False)
             return (raw, False)
         except Exception:
             return ("", False)

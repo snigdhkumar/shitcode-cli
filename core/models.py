@@ -50,3 +50,5 @@ class ClientState:
     pending_workspace_target: Optional[str] = None
     reconnect_with_new_token: Optional[str] = None
     newer_version_available: Optional[str] = None
+    expanded_request_view: bool = False
+    last_ai_request: Optional[Dict[str, Any]] = None

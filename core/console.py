@@ -130,7 +130,9 @@ async def interactive_console_loop(state: ClientState):
 
             # 1. AI Tool Permission prompt (highest priority)
             if state.pending_perm_future and not state.pending_perm_future.done():
-                if is_escape or cleaned.lower() in ("n", "no", "cancel"):
+                if cleaned in ("__CTRL_O__", "ctrl+o", "\x0f"):
+                    state.pending_perm_future.set_result("__ctrl_o__")
+                elif is_escape or cleaned.lower() in ("n", "no", "cancel"):
                     state.pending_perm_future.set_result("n")
                 else:
                     state.pending_perm_future.set_result(cleaned.lower())
@@ -235,7 +237,21 @@ async def interactive_console_loop(state: ClientState):
                     execute_update_routine(skip_prompt=True)
                 continue
 
-            # 4. Escape key pressed or user typed 'esc' / 'clear' -> Clear screen and restore main banner
+            # 4. Handle Ctrl+O or 'expand' / 'verbose' to toggle enlarged AI request view
+            if cleaned in ("__CTRL_O__", "ctrl+o", "\x0f", "expand", "verbose"):
+                state.expanded_request_view = not getattr(state, "expanded_request_view", False)
+                mode_str = "ENLARGED (Full parameters shown)" if state.expanded_request_view else "COMPACT (Truncated previews)"
+                mode_color = GREEN if state.expanded_request_view else YELLOW
+                print(f"\n  {mode_color}● AI Request View: {BOLD}{mode_str}{RESET}")
+                print(f"    {DIM}Press {BOLD}Ctrl+O{RESET}{DIM} to toggle again.{RESET}")
+                if getattr(state, "last_ai_request", None):
+                    from core.tunnel import format_ai_request
+                    last = state.last_ai_request
+                    print(format_ai_request(last["tool"], last["arguments"], last["time"], expanded=state.expanded_request_view))
+                print()
+                continue
+
+            # 5. Escape key pressed or user typed 'esc' / 'clear' -> Clear screen and restore main banner
             if is_escape or cleaned.lower() in ("esc", "escape"):
                 clear_screen()
                 print_banner(state)
