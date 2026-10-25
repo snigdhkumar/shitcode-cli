@@ -84,7 +84,7 @@ async def confirm_tool_execution(tool_name: str, arguments: Dict[str, Any], stat
         return "deny"
 
 
-async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
+async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> Any:
     """Execute a local tool function with arguments."""
     if tool_name not in TOOLS_MAP:
         raise ValueError(f"Tool '{tool_name}' is not registered on this client.")
@@ -130,6 +130,9 @@ async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
         result = await fn(**valid_args)
     else:
         result = await asyncio.to_thread(fn, **valid_args)
+
+    if isinstance(result, (dict, list)):
+        return result
 
     return str(result) if result is not None else ""
 
@@ -267,6 +270,7 @@ async def run_client_loop(
                         t_start = time.perf_counter()
                         try:
                             output = await execute_tool(tool_name, arguments)
+                            elapsed_ms = int((time.perf_counter() - t_start) * 1000)
                             if isinstance(output, dict) and "content" in output:
                                 print(f"         {GREEN}[+] Completed in {elapsed_ms}ms{RESET} {CYAN}(Returned visual image payload to AI){RESET}")
                             else:
