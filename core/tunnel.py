@@ -24,6 +24,7 @@ from core.config import (
 )
 from core.console import async_prompt_line, interactive_console_loop
 from core.models import ClientState, TOOLS_MAP
+from core.terminal_io import clear_screen
 from core.updater import (
     CLIENT_VERSION,
     PRODUCTION_GATEWAY_URL,
@@ -33,7 +34,13 @@ from ui.theme import BOLD, CYAN, DIM, GREEN, ORANGE, RED, RESET, YELLOW
 from ui.views import print_banner, print_invalid_token_card
 
 
-def format_ai_request(tool_name: str, arguments: Dict[str, Any], t_stamp: str, expanded: bool = False) -> str:
+def format_ai_request(
+    tool_name: str,
+    arguments: Dict[str, Any],
+    t_stamp: str,
+    expanded: bool = False,
+    show_hint: bool = True
+) -> str:
     """Format an incoming AI tool request in compact (truncated) or enlarged (full) view."""
     if not expanded:
         args_preview = json.dumps(arguments, ensure_ascii=False)
@@ -42,9 +49,10 @@ def format_ai_request(tool_name: str, arguments: Dict[str, Any], t_stamp: str, e
         lines = [
             f"\n{CYAN}[{t_stamp}]{RESET} {BOLD}╭─ AI Request:{RESET} {ORANGE}{tool_name}{RESET} {DIM}──────────────────────────────────╮{RESET}",
             f"         {DIM}│ Args: {args_preview}{RESET}",
-            f"         {DIM}│ {DIM}(Press {BOLD}Ctrl+O{RESET}{DIM} to enlarge request){RESET}",
-            f"         {DIM}╰────────────────────────────────────────────────────────╯{RESET}"
         ]
+        if show_hint:
+            lines.append(f"         {DIM}│ {DIM}(Press {BOLD}Ctrl+O{RESET}{DIM} to enlarge all requests){RESET}")
+        lines.append(f"         {DIM}╰────────────────────────────────────────────────────────╯{RESET}")
         return "\n".join(lines)
 
     # Enlarged view
@@ -68,8 +76,52 @@ def format_ai_request(tool_name: str, arguments: Dict[str, Any], t_stamp: str, e
                     v_str = v_str[:297] + '..."'
                 body_lines.append(f"         {DIM}│   {CYAN}• {k}:{RESET} {v_str}")
 
-    body_lines.append(f"         {DIM}│ {DIM}(Press {BOLD}Ctrl+O{RESET}{DIM} to minimize request){RESET}")
+    if show_hint:
+        body_lines.append(f"         {DIM}│ {DIM}(Press {BOLD}Ctrl+O{RESET}{DIM} to minimize all requests){RESET}")
     return header + "\n" + "\n".join(body_lines) + "\n" + footer
+
+
+def render_request_history(state: ClientState, exclude_last: bool = False):
+    """Re-render all session requests in the current mode (compact or enlarged), taking the user to the last request."""
+    history = getattr(state, "request_history", [])
+    if exclude_last and history:
+        history = history[:-1]
+
+    if not history:
+        mode_str = "ENLARGED" if getattr(state, "expanded_request_view", False) else "COMPACT"
+        mode_col = GREEN if getattr(state, "expanded_request_view", False) else YELLOW
+        print(f"\n  {mode_col}● AI Request View: {BOLD}{mode_str}{RESET} {DIM}(No requests in this session yet. Press Ctrl+O to toggle.){RESET}\n")
+        return
+
+    for req in history:
+        t_stamp = req.get("time", "")
+        tool_name = req.get("tool", "")
+        arguments = req.get("arguments", {})
+        status = req.get("status", "completed")
+        elapsed_ms = req.get("elapsed_ms")
+        is_visual = req.get("is_visual", False)
+        error = req.get("error")
+
+        print(format_ai_request(tool_name, arguments, t_stamp, expanded=state.expanded_request_view, show_hint=False))
+
+        if status == "completed":
+            if elapsed_ms is not None:
+                if is_visual:
+                    print(f"         {GREEN}[+] Completed in {elapsed_ms}ms{RESET} {CYAN}(Returned visual image payload to AI){RESET}")
+                else:
+                    print(f"         {GREEN}[+] Completed in {elapsed_ms}ms{RESET} {DIM}(Returned result to AI){RESET}")
+            else:
+                print(f"         {GREEN}[+] Completed{RESET}")
+        elif status == "error":
+            ms_str = f" ({elapsed_ms}ms)" if elapsed_ms is not None else ""
+            print(f"         {RED}[!] Execution error{ms_str}: {error}{RESET}")
+        elif status == "declined":
+            print(f"         {RED}[-] Action declined by user.{RESET}")
+
+    mode_str = "ENLARGED" if state.expanded_request_view else "COMPACT"
+    hint_action = "minimize" if state.expanded_request_view else "enlarge"
+    mode_col = GREEN if state.expanded_request_view else YELLOW
+    print(f"\n  {mode_col}● AI Request View: {BOLD}{mode_str}{RESET} {DIM}(Showing {len(history)} request{'s' if len(history) != 1 else ''} · Press {BOLD}Ctrl+O{RESET}{DIM} to {hint_action}){RESET}\n")
 
 
 async def confirm_tool_execution(tool_name: str, arguments: Dict[str, Any], state: ClientState) -> str:
@@ -143,8 +195,9 @@ async def confirm_tool_execution(tool_name: str, arguments: Dict[str, Any], stat
 
             if choice in ("__ctrl_o__", "ctrl+o", "o"):
                 state.expanded_request_view = not getattr(state, "expanded_request_view", False)
-                mode_lbl = "ENLARGED" if state.expanded_request_view else "COMPACT"
-                print(f"\n  {GREEN}● Switched permission view to: {BOLD}{mode_lbl}{RESET}")
+                clear_screen()
+                print_banner(state)
+                render_request_history(state, exclude_last=True)
                 continue
 
             if choice in ("y", "yes", ""):
@@ -313,11 +366,21 @@ async def run_client_loop(
                         arguments = data.get("arguments", {})
 
                         t_stamp = datetime.now().strftime("%H:%M:%S")
-                        state.last_ai_request = {
+                        req_entry = {
                             "tool": tool_name,
                             "arguments": arguments,
                             "time": t_stamp,
+                            "status": "running",
+                            "elapsed_ms": None,
+                            "is_visual": False,
+                            "error": None,
                         }
+                        if not hasattr(state, "request_history") or state.request_history is None:
+                            state.request_history = []
+                        state.request_history.append(req_entry)
+                        if len(state.request_history) > 40:
+                            state.request_history = state.request_history[-40:]
+                        state.last_ai_request = req_entry
                         print(format_ai_request(tool_name, arguments, t_stamp, expanded=getattr(state, "expanded_request_view", False)))
 
                         if state.ask_permission:
@@ -333,6 +396,7 @@ async def run_client_loop(
                                 await ws.close()
                                 return
                             elif perm_result == "deny":
+                                req_entry["status"] = "declined"
                                 print(f"         {RED}[-] Action declined by user.{RESET}")
                                 await ws.send(json.dumps({
                                     "type": "tool_result",
@@ -346,7 +410,11 @@ async def run_client_loop(
                         try:
                             output = await execute_tool(tool_name, arguments)
                             elapsed_ms = int((time.perf_counter() - t_start) * 1000)
-                            if isinstance(output, dict) and "content" in output:
+                            is_visual = isinstance(output, dict) and "content" in output
+                            req_entry["status"] = "completed"
+                            req_entry["elapsed_ms"] = elapsed_ms
+                            req_entry["is_visual"] = is_visual
+                            if is_visual:
                                 print(f"         {GREEN}[+] Completed in {elapsed_ms}ms{RESET} {CYAN}(Returned visual image payload to AI){RESET}")
                             else:
                                 print(f"         {GREEN}[+] Completed in {elapsed_ms}ms{RESET} {DIM}(Returned result to AI){RESET}")
@@ -359,6 +427,9 @@ async def run_client_loop(
                             }
                         except Exception as e:
                             elapsed_ms = int((time.perf_counter() - t_start) * 1000)
+                            req_entry["status"] = "error"
+                            req_entry["elapsed_ms"] = elapsed_ms
+                            req_entry["error"] = str(e)
                             print(f"         {RED}[!] Execution error ({elapsed_ms}ms): {e}{RESET}")
 
                             response = {

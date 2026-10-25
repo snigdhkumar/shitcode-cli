@@ -261,15 +261,10 @@ def process_command(cmd_raw: str, state: Any, tools_map: Optional[Dict[str, Any]
 
     elif action in ("expand", "/expand", "verbose", "view", "toggle", "ctrl+o"):
         state.expanded_request_view = not getattr(state, "expanded_request_view", False)
-        mode_str = "ENLARGED (Full parameters shown)" if state.expanded_request_view else "COMPACT (Truncated previews)"
-        mode_color = GREEN if state.expanded_request_view else YELLOW
-        print(f"\n  {mode_color}● AI Request View: {BOLD}{mode_str}{RESET}")
-        print(f"    {DIM}Press {BOLD}Ctrl+O{RESET}{DIM} to toggle anytime.{RESET}")
-        if getattr(state, "last_ai_request", None):
-            from core.tunnel import format_ai_request
-            last = state.last_ai_request
-            print(format_ai_request(last["tool"], last["arguments"], last["time"], expanded=state.expanded_request_view))
-        print()
+        clear_screen()
+        print_banner(state, tools_map=tools_map)
+        from core.tunnel import render_request_history
+        render_request_history(state)
 
     elif action in ("clear", "cls", "/clear", "esc", "escape"):
         clear_screen()

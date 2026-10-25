@@ -240,15 +240,10 @@ async def interactive_console_loop(state: ClientState):
             # 4. Handle Ctrl+O or 'expand' / 'verbose' to toggle enlarged AI request view
             if cleaned in ("__CTRL_O__", "ctrl+o", "\x0f", "expand", "verbose"):
                 state.expanded_request_view = not getattr(state, "expanded_request_view", False)
-                mode_str = "ENLARGED (Full parameters shown)" if state.expanded_request_view else "COMPACT (Truncated previews)"
-                mode_color = GREEN if state.expanded_request_view else YELLOW
-                print(f"\n  {mode_color}● AI Request View: {BOLD}{mode_str}{RESET}")
-                print(f"    {DIM}Press {BOLD}Ctrl+O{RESET}{DIM} to toggle again.{RESET}")
-                if getattr(state, "last_ai_request", None):
-                    from core.tunnel import format_ai_request
-                    last = state.last_ai_request
-                    print(format_ai_request(last["tool"], last["arguments"], last["time"], expanded=state.expanded_request_view))
-                print()
+                clear_screen()
+                print_banner(state)
+                from core.tunnel import render_request_history
+                render_request_history(state)
                 continue
 
             # 5. Escape key pressed or user typed 'esc' / 'clear' -> Clear screen and restore main banner

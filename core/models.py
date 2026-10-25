@@ -52,3 +52,4 @@ class ClientState:
     newer_version_available: Optional[str] = None
     expanded_request_view: bool = False
     last_ai_request: Optional[Dict[str, Any]] = None
+    request_history: list[Dict[str, Any]] = field(default_factory=list)
