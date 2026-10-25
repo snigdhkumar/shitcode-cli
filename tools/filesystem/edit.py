@@ -1,61 +1,14 @@
-"""Filesystem and precision code editing tools for ShitCode.
-Implements line-numbered file viewing, safe writes, unified diff patching,
-atomic multi-patching (from Antigravity), and structured directory listing.
+"""Precision file editing and atomic patching tools for ShitCode.
+Implements safe writes, unified diff search-and-replace, and Antigravity-style atomic multi-patching.
 """
 
 from __future__ import annotations
 
 import difflib
-import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 from core.reporter import with_error_reporting
-
-
-@with_error_reporting("read_file")
-def read_file(path: str, offset: int = 1, limit: int = 200) -> str:
-    """Read a slice of lines from a file with 1-indexed line numbers.
-
-    Args:
-        path: Path to the target file.
-        offset: Line number to start reading from (1-indexed, default 1).
-        limit: Maximum number of lines to return (default 200).
-    """
-    file_path = Path(path).resolve()
-    if not file_path.exists():
-        return f"Error: File not found: {path}"
-    if not file_path.is_file():
-        return f"Error: Path is a directory, not a file: {path}"
-
-    try:
-        content = file_path.read_text(encoding="utf-8", errors="replace")
-    except Exception as e:
-        return f"Error reading file '{path}': {e}"
-
-    lines = content.splitlines()
-    total_lines = len(lines)
-
-    if total_lines == 0:
-        return "(File is empty)"
-
-    start_idx = max(0, offset - 1)
-    end_idx = min(total_lines, start_idx + limit)
-
-    selected_lines = lines[start_idx:end_idx]
-
-    output_lines = []
-    for i, line in enumerate(selected_lines, start=start_idx + 1):
-        output_lines.append(f"{i}: {line}")
-
-    result = "\n".join(output_lines)
-    header = f"File: {path} (Showing lines {start_idx + 1}-{end_idx} of {total_lines})\n"
-    if end_idx < total_lines:
-        footer = f"\n... [{total_lines - end_idx} more lines remaining]"
-    else:
-        footer = ""
-
-    return header + result + footer
 
 
 @with_error_reporting("write_file")
@@ -240,61 +193,4 @@ def multi_patch_file(
         )
     )
     diff_text = "".join(diff)
-    return f"Successfully applied {len(replacements)} atomic patches to '{path}'.\n\n```diff\n{diff_text}\n```"
-
-
-@with_error_reporting("list_dir")
-def list_dir(path: str = ".", recursive: bool = False, max_depth: int = 2) -> str:
-    """List directory contents with file sizes and type markers.
-
-    Args:
-        path: Directory path to list (default current directory).
-        recursive: Whether to list subdirectories recursively (default False).
-        max_depth: Maximum recursion depth when recursive=True (default 2).
-    """
-    root_path = Path(path).resolve()
-    if not root_path.exists():
-        return f"Error: Directory not found: {path}"
-    if not root_path.is_dir():
-        return f"Error: Path is a file, not a directory: {path}"
-
-    lines = [f"Directory listing for: {root_path}"]
-
-    def _format_size(size_bytes: int) -> str:
-        if size_bytes < 1024:
-            return f"{size_bytes} B"
-        elif size_bytes < 1024 * 1024:
-            return f"{size_bytes / 1024:.1f} KB"
-        else:
-            return f"{size_bytes / (1024 * 1024):.1f} MB"
-
-    def _walk(current: Path, depth: int, prefix: str = ""):
-        if depth > max_depth:
-            return
-        try:
-            entries = sorted(current.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
-        except PermissionError:
-            lines.append(f"{prefix}└── [Permission Denied]")
-            return
-
-        for idx, entry in enumerate(entries):
-            # Skip hidden and cache entries
-            if entry.name.startswith((".", "__pycache__")):
-                continue
-            is_last = idx == len(entries) - 1
-            connector = "└── " if is_last else "├── "
-            sub_prefix = "    " if is_last else "│   "
-
-            if entry.is_dir():
-                lines.append(f"{prefix}{connector}[DIR] {entry.name}/")
-                if recursive and depth < max_depth:
-                    _walk(entry, depth + 1, prefix + sub_prefix)
-            else:
-                try:
-                    size_str = _format_size(entry.stat().st_size)
-                except Exception:
-                    size_str = "unknown size"
-                lines.append(f"{prefix}{connector}{entry.name} ({size_str})")
-
-    _walk(root_path, depth=1)
-    return "\n".join(lines)
+    return f"Successfully applied {len(target_replacements)} atomic patches to '{path}'.\n\n```diff\n{diff_text}\n```"

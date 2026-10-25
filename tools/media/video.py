@@ -1,14 +1,11 @@
-"""Multimodal Vision & Video Engine Tool for ShitCode.
-Provides direct image and video inspection capabilities for AI chatbots (ChatGPT, Claude, etc.)
-using standard MCP image content blocks and on-demand universal FFmpeg provisioning.
+"""Paginated chunked video inspection engine with on-demand FFmpeg provisioning.
+Processes videos in sequential temporal windows with sub-second keyframe fast seeking.
 """
 
 from __future__ import annotations
 
 import asyncio
 import base64
-import json
-import mimetypes
 import os
 import re
 import shutil
@@ -19,106 +16,14 @@ from typing import Any, Dict, List, Optional
 
 from core.ffmpeg_installer import ensure_ffmpeg_installed
 from core.reporter import with_error_reporting
+from tools.media.image import resolve_media_path
+from tools.media.optimizer import optimize_image_for_vision
 
-ROOT_DIR = Path(__file__).resolve().parent.parent
+ROOT_DIR = Path(__file__).resolve().parent.parent.parent
 TEMP_DIR = ROOT_DIR / ".temp"
 
 
-def _resolve_media_path(path_str: str) -> Path:
-    """Resolve relative or absolute media path safely."""
-    p = Path(path_str.strip().strip("\"'"))
-    if not p.is_absolute():
-        p = (Path.cwd() / p).resolve()
-    return p
-
-
-def optimize_image_for_vision(
-    raw_bytes: bytes,
-    max_dimension: int = 1280,
-    quality: int = 75,
-    max_payload_kb: int = 100,
-) -> tuple[bytes, str, str]:
-    """Downsample and compress image bytes to keep payload under max_payload_kb (~50-80KB).
-    Prevents overflowing LLM context windows while preserving high visual fidelity for vision encoders.
-    Returns: (optimized_bytes, mime_type, optimization_note)
-    """
-    try:
-        from PIL import Image
-        import io
-
-        im = Image.open(io.BytesIO(raw_bytes))
-        orig_w, orig_h = im.size
-        orig_kb = len(raw_bytes) // 1024
-
-        # If already lightweight (< max_payload_kb) and within bounds, keep original
-        if orig_kb <= max_payload_kb and max(orig_w, orig_h) <= max_dimension:
-            fmt = (im.format or "JPEG").lower()
-            mime = "image/jpeg" if fmt in ("jpeg", "jpg") else f"image/{fmt}"
-            return raw_bytes, mime, f"{orig_kb} KB, {orig_w}x{orig_h}"
-
-        # Convert transparency/palette to clean white-background RGB for JPEG compression
-        if im.mode in ("RGBA", "LA", "P"):
-            rgb = Image.new("RGB", im.size, (255, 255, 255))
-            if im.mode == "RGBA":
-                rgb.paste(im, mask=im.split()[3])
-            else:
-                rgb.paste(im.convert("RGBA"))
-            im = rgb
-        elif im.mode != "RGB":
-            im = im.convert("RGB")
-
-        # Resize keeping aspect ratio if larger than max_dimension
-        if max(im.size) > max_dimension:
-            im.thumbnail((max_dimension, max_dimension), Image.Resampling.LANCZOS)
-
-        new_w, new_h = im.size
-        out = io.BytesIO()
-        im.save(out, format="JPEG", quality=quality, optimize=True)
-        compressed_bytes = out.getvalue()
-        comp_kb = len(compressed_bytes) // 1024
-
-        note = f"{comp_kb} KB (optimized from {orig_kb} KB, {new_w}x{new_h})"
-        return compressed_bytes, "image/jpeg", note
-    except Exception as e:
-        # Fallback if PIL is unavailable or encounters error
-        kb = len(raw_bytes) // 1024
-        return raw_bytes, "image/jpeg", f"{kb} KB"
-
-
-@with_error_reporting("image_inspect")
-async def image_inspect(path: str, max_dimension: int = 1280) -> Any:
-    """Inspect and visually analyze any local image file on the host machine.
-    
-    Returns standard MCP multimodal image blocks directly to the AI vision encoder,
-    automatically optimized and compressed to prevent overflowing LLM conversation limits.
-    """
-    target = _resolve_media_path(path)
-    if not target.is_file():
-        return f"Error: Image file not found at '{path}'."
-
-    try:
-        raw_bytes = target.read_bytes()
-        opt_bytes, opt_mime, note = optimize_image_for_vision(raw_bytes, max_dimension=max_dimension)
-        b64_data = base64.b64encode(opt_bytes).decode("ascii")
-
-        return {
-            "content": [
-                {
-                    "type": "text",
-                    "text": f"Image '{target.name}' loaded successfully ({note}, MIME: {opt_mime})."
-                },
-                {
-                    "type": "image",
-                    "data": b64_data,
-                    "mimeType": opt_mime
-                }
-            ]
-        }
-    except Exception as e:
-        return f"Error reading image '{target.name}': {e}"
-
-
-def _parse_timestamp(val: Any) -> float:
+def parse_timestamp(val: Any) -> float:
     """Parse seconds, float string, or HH:MM:SS string to float seconds."""
     if val is None:
         return 0.0
@@ -140,7 +45,7 @@ def _parse_timestamp(val: Any) -> float:
         return 0.0
 
 
-def _format_timestamp(seconds: float) -> str:
+def format_timestamp(seconds: float) -> str:
     """Convert float seconds to clean HH:MM:SS format."""
     total_sec = max(0.0, float(seconds))
     h = int(total_sec // 3600)
@@ -162,7 +67,7 @@ async def video_inspect(
     Returns video metadata, individual frame timestamps, and a 'Next Window' pagination cursor
     to inspect subsequent segments or jump to specific timestamps without overflowing token context.
     """
-    target = _resolve_media_path(path)
+    target = resolve_media_path(path)
     if not target.is_file():
         return f"Error: Video file not found at '{path}'."
 
@@ -185,7 +90,7 @@ async def video_inspect(
         if dur_match:
             h, m, s = float(dur_match.group(1)), float(dur_match.group(2)), float(dur_match.group(3))
             total_sec = h * 3600 + m * 60 + s
-            dur_str = _format_timestamp(total_sec)
+            dur_str = format_timestamp(total_sec)
         if res_match:
             res_str = res_match.group(1)
     except Exception as meta_err:
@@ -194,7 +99,7 @@ async def video_inspect(
     # 3. Parameter validation and chunk boundaries
     max_frames = max(1, min(int(max_frames), 16))
     fps = max(0.05, min(float(fps), 5.0))
-    start_sec = _parse_timestamp(start_time)
+    start_sec = parse_timestamp(start_time)
 
     session_id = f"video_{int(time.time())}_{os.getpid()}"
     out_dir = TEMP_DIR / session_id
@@ -229,7 +134,7 @@ async def video_inspect(
         # Read generated frames
         frame_files = sorted(out_dir.glob("frame_*.jpg"))
         if not frame_files:
-            return f"No frames could be extracted from video '{target.name}' at timestamp {_format_timestamp(start_sec)}. {proc.stderr[:200]}"
+            return f"No frames could be extracted from video '{target.name}' at timestamp {format_timestamp(start_sec)}. {proc.stderr[:200]}"
 
         frame_interval = 1.0 / fps
         window_duration = len(frame_files) * frame_interval
@@ -244,7 +149,7 @@ async def video_inspect(
             if window_end_sec < total_sec - 0.5:
                 has_more = True
                 next_start_sec = round(window_end_sec, 2)
-                next_start_time = _format_timestamp(next_start_sec)
+                next_start_time = format_timestamp(next_start_sec)
                 remaining_sec = max(0.0, round(total_sec - window_end_sec, 1))
                 remaining_desc = f" ({remaining_sec}s remaining after this window)"
             else:
@@ -252,12 +157,12 @@ async def video_inspect(
         elif len(frame_files) == max_frames:
             has_more = True
             next_start_sec = round(window_end_sec, 2)
-            next_start_time = _format_timestamp(next_start_sec)
+            next_start_time = format_timestamp(next_start_sec)
 
         timeline_lines = []
         for i in range(len(frame_files)):
             f_sec = start_sec + (i * frame_interval)
-            timeline_lines.append(f"- Frame {i + 1}: [{_format_timestamp(f_sec)}]")
+            timeline_lines.append(f"- Frame {i + 1}: [{format_timestamp(f_sec)}]")
         timeline_text = "\n".join(timeline_lines)
 
         if has_more and next_start_time:
@@ -274,7 +179,7 @@ async def video_inspect(
         intro_text = (
             f"{install_notice}Video '{target.name}' analyzed successfully (Chunk Window).\n"
             f"Metadata: Duration: {dur_str} | Resolution: {res_str}\n"
-            f"Current Window: [{_format_timestamp(start_sec)}] to [{_format_timestamp(window_end_sec)}] "
+            f"Current Window: [{format_timestamp(start_sec)}] to [{format_timestamp(window_end_sec)}] "
             f"({len(frame_files)} frames at {fps} fps, ~{frame_interval:.1f}s interval):\n\n"
             f"Frame Timestamps:\n{timeline_text}\n\n"
             f"{pagination_text}"

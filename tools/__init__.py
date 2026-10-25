@@ -1,5 +1,5 @@
 """Tool Aggregator and Registry for ShitCode.
-Registers all 17 high-performance coding agent tools onto MCPServer.
+Registers all 28 high-performance autonomous coding, browser, multimodal, and computer control tools onto MCPServer.
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ from tools.browser import (
     browser_close,
 )
 from tools.media import image_inspect, video_inspect
+from tools.desktop import computer, computer_actions
 
 if TYPE_CHECKING:
     from mcp.server.mcpserver import MCPServer
@@ -63,6 +64,9 @@ ALL_TOOLS: List[Callable[..., Any]] = [
     # Multimodal Vision & Video Engine
     image_inspect,
     video_inspect,
+    # Desktop & Computer Control Automation
+    computer,
+    computer_actions,
 ]
 
 

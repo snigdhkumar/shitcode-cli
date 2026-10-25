@@ -29,7 +29,10 @@ def get_tool_categories(tools_map: Dict[str, Any] | None = None) -> str:
                 tools_map = {}
     if not tools_map:
         return "none"
-    cats = sorted({fn.__module__.split(".")[-1] for fn in tools_map.values()})
+    cats = sorted({
+        (fn.__module__.split(".")[1] if fn.__module__.startswith("tools.") and len(fn.__module__.split(".")) > 1 else fn.__module__.split(".")[-1])
+        for fn in tools_map.values()
+    })
     return ", ".join(cats)
 
 
@@ -62,7 +65,7 @@ def print_banner(state: Any, client_version: Optional[str] = None, tools_map: Di
             from core.updater import load_client_version
             client_version = load_client_version()
         except Exception:
-            client_version = "1.3.0"
+            client_version = "1.4.0"
     sys_badge = get_system_badge()
     if tools_map is None:
         for mod_name in ("shitcode", "shitcode_client"):

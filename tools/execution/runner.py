@@ -1,4 +1,4 @@
-"""Code execution tool for Shitcode.
+"""Sandboxed Python code execution tool for ShitCode.
 Runs Python snippets in a sandboxed child process with timeout protection.
 """
 
@@ -58,7 +58,7 @@ def execute_code(
     except subprocess.TimeoutExpired:
         return f"Error: Code execution timed out after {timeout} seconds."
     except Exception as e:
-        return f"Execution error: {e}"
+        return f"Code execution error: {e}"
     finally:
         try:
             Path(temp_path).unlink(missing_ok=True)

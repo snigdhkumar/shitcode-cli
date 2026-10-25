@@ -62,7 +62,7 @@ def _html_to_markdown(html_content: str, char_limit: int = 50000) -> str:
         if len(result) > char_limit:
             result = result[:char_limit] + f"\n\n... [Content truncated at {char_limit} characters]"
         return result
-    except Exception as e:
+    except Exception:
         # Fallback regex strip
         text = re.sub(r"<[^>]+>", " ", html_content)
         text = re.sub(r"\s+", " ", text).strip()

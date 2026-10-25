@@ -22,6 +22,8 @@ MODIFYING_TOOLS = {
     "browser_type",
     "browser_actions",
     "browser_close",
+    "computer",
+    "computer_actions",
 }
 
 # Dynamically load registered tools
