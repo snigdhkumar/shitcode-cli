@@ -82,14 +82,6 @@ def get_clipboard_text() -> str:
                     return res.stdout
             except Exception:
                 pass
-    elif sys.platform.darwin:
-        import subprocess
-        try:
-            res = subprocess.run(["pbpaste"], capture_output=True, text=True, timeout=0.5)
-            if res.returncode == 0 and res.stdout:
-                return res.stdout
-        except Exception:
-            pass
 
     # Universal GUI Tkinter fallback (only if display server is available on non-Windows)
     if sys.platform != "win32" and not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):

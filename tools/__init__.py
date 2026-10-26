@@ -23,7 +23,16 @@ from tools.browser import (
     browser_close,
 )
 from tools.media import image_inspect, video_inspect
-from tools.desktop import computer, computer_actions
+from tools.desktop import (
+    clipboard_read,
+    clipboard_write,
+    computer,
+    computer_actions,
+    system_info,
+    window_focus,
+    window_state,
+    windows_list,
+)
 
 if TYPE_CHECKING:
     from mcp.server.mcpserver import MCPServer
@@ -67,6 +76,12 @@ ALL_TOOLS: List[Callable[..., Any]] = [
     # Desktop & Computer Control Automation
     computer,
     computer_actions,
+    windows_list,
+    window_focus,
+    window_state,
+    clipboard_write,
+    clipboard_read,
+    system_info,
 ]
 
 

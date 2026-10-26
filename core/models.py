@@ -24,6 +24,9 @@ MODIFYING_TOOLS = {
     "browser_close",
     "computer",
     "computer_actions",
+    "window_focus",
+    "window_state",
+    "clipboard_write",
 }
 
 # Dynamically load registered tools

@@ -5,13 +5,17 @@ Allows external AI models (ChatGPT, Claude) to interact with the local host desk
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from typing import Any, Dict, List, Optional
 
 from core.reporter import with_error_reporting
+from tools.desktop.clipboard import copy_to_clipboard, paste_text_via_clipboard, read_from_clipboard
 from tools.desktop.controller import InputController
 from tools.desktop.screen import ScreenManager
+from tools.desktop.system import get_system_metrics
+from tools.desktop.windows import focus_desktop_window, list_desktop_windows, set_desktop_window_state
 
 logger = logging.getLogger("shitcode.tools.desktop.actions")
 
@@ -196,7 +200,31 @@ async def computer(
         cx, cy = ctrl.get_cursor_position()
         return f"Current cursor position: ({cx}, {cy})."
 
-    return f"Unknown action: '{action}'. Available: screenshot, mouse_move, left_click, right_click, middle_click, double_click, triple_click, mouse_down, mouse_up, left_click_drag, type, key, hotkey, press_enter, scroll, wait, cursor_position."
+    elif act in ("window_focus", "focus_window"):
+        if not text:
+            return "Error: 'text' parameter specifying window title or name is required for 'window_focus'."
+        res_focus = await asyncio.to_thread(focus_desktop_window, title=text)
+        shot = await asyncio.to_thread(screen_mgr.capture_screenshot)
+        return _attach_screenshot_note(shot, res_focus.get("message", res_focus.get("error", "Window focus executed.")))
+
+    elif act in ("clipboard_paste", "paste"):
+        if not text:
+            return "Error: 'text' parameter is required for action 'clipboard_paste'."
+        res_paste = await asyncio.to_thread(paste_text_via_clipboard, text=text)
+        shot = await asyncio.to_thread(screen_mgr.capture_screenshot)
+        return _attach_screenshot_note(shot, res_paste.get("message", "Pasted text via clipboard."))
+
+    elif act in ("clipboard_write", "copy"):
+        if not text:
+            return "Error: 'text' parameter is required for action 'clipboard_write'."
+        res_copy = await asyncio.to_thread(copy_to_clipboard, text=text)
+        return res_copy.get("message", "Copied to clipboard.")
+
+    elif act == "clipboard_read":
+        res_read = await asyncio.to_thread(read_from_clipboard)
+        return res_read.get("content", "")
+
+    return f"Unknown action: '{action}'. Available: screenshot, mouse_move, left_click, right_click, middle_click, double_click, triple_click, mouse_down, mouse_up, left_click_drag, type, key, hotkey, press_enter, scroll, wait, cursor_position, window_focus, clipboard_paste, clipboard_write, clipboard_read."
 
 
 @with_error_reporting("computer_actions")
@@ -410,6 +438,55 @@ async def computer_actions(actions: list) -> Any:
                 _safe_print(f"{CYAN}│{RESET} {GREEN}[✓]{RESET} {idx+1}. {desc:<50} {DIM}({dur_ms}ms){RESET}")
                 step_reports.append({"step": idx + 1, "action": "cursor_position", "status": "ok", "x": cx, "y": cy, "elapsed_ms": dur_ms})
 
+            elif action_type in ("window_focus", "focus_window", "focus"):
+                target_title = item.get("title") or item.get("target") or item.get("name")
+                target_id = item.get("window_id") or item.get("id")
+                res_focus = await asyncio.to_thread(focus_desktop_window, title=target_title, window_id=target_id)
+                dur_ms = int((time.time() - t0) * 1000)
+                desc = f"window_focus ('{target_title or target_id}')"
+                if res_focus.get("success"):
+                    _safe_print(f"{CYAN}│{RESET} {GREEN}[✓]{RESET} {idx+1}. {desc:<50} {DIM}({dur_ms}ms){RESET}")
+                    step_reports.append({"step": idx + 1, "action": "window_focus", "status": "ok", "title": target_title, "elapsed_ms": dur_ms})
+                else:
+                    raise RuntimeError(res_focus.get("error", "Window focus failed"))
+
+            elif action_type in ("window_state", "set_window_state"):
+                target_title = item.get("title") or item.get("target")
+                target_id = item.get("window_id") or item.get("id")
+                state_act = item.get("state") or item.get("value") or "restore"
+                res_state = await asyncio.to_thread(set_desktop_window_state, action=state_act, title=target_title, window_id=target_id)
+                dur_ms = int((time.time() - t0) * 1000)
+                desc = f"window_state {state_act} ('{target_title or target_id}')"
+                if res_state.get("success"):
+                    _safe_print(f"{CYAN}│{RESET} {GREEN}[✓]{RESET} {idx+1}. {desc:<50} {DIM}({dur_ms}ms){RESET}")
+                    step_reports.append({"step": idx + 1, "action": "window_state", "status": "ok", "state": state_act, "elapsed_ms": dur_ms})
+                else:
+                    raise RuntimeError(res_state.get("error", "Window state change failed"))
+
+            elif action_type in ("clipboard_paste", "paste"):
+                paste_text = item.get("text") or item.get("value") or ""
+                res_paste = await asyncio.to_thread(paste_text_via_clipboard, text=paste_text)
+                dur_ms = int((time.time() - t0) * 1000)
+                preview = paste_text[:25] + ("..." if len(paste_text) > 25 else "")
+                desc = f"clipboard_paste ({len(paste_text)} chars: \"{preview}\")"
+                _safe_print(f"{CYAN}│{RESET} {GREEN}[✓]{RESET} {idx+1}. {desc:<50} {DIM}({dur_ms}ms){RESET}")
+                step_reports.append({"step": idx + 1, "action": "clipboard_paste", "status": "ok", "length": len(paste_text), "elapsed_ms": dur_ms})
+
+            elif action_type in ("clipboard_write", "copy", "set_clipboard"):
+                copy_text = item.get("text") or item.get("value") or ""
+                res_copy = await asyncio.to_thread(copy_to_clipboard, text=copy_text)
+                dur_ms = int((time.time() - t0) * 1000)
+                desc = f"clipboard_write ({len(copy_text)} chars)"
+                _safe_print(f"{CYAN}│{RESET} {GREEN}[✓]{RESET} {idx+1}. {desc:<50} {DIM}({dur_ms}ms){RESET}")
+                step_reports.append({"step": idx + 1, "action": "clipboard_write", "status": "ok", "length": len(copy_text), "elapsed_ms": dur_ms})
+
+            elif action_type in ("clipboard_read", "get_clipboard"):
+                res_read = await asyncio.to_thread(read_from_clipboard)
+                dur_ms = int((time.time() - t0) * 1000)
+                desc = f"clipboard_read ({res_read.get('length', 0)} chars)"
+                _safe_print(f"{CYAN}│{RESET} {GREEN}[✓]{RESET} {idx+1}. {desc:<50} {DIM}({dur_ms}ms){RESET}")
+                step_reports.append({"step": idx + 1, "action": "clipboard_read", "status": "ok", "content": res_read.get("content", ""), "elapsed_ms": dur_ms})
+
             else:
                 raise ValueError(f"Unknown desktop action: '{action_type}'")
 
@@ -465,3 +542,53 @@ async def computer_actions(actions: list) -> Any:
     if last_screenshot and "content" in last_screenshot:
         res_ok["content"] = last_screenshot["content"]
     return res_ok
+
+
+@with_error_reporting("windows_list")
+async def windows_list() -> str:
+    """List all open desktop application windows with title, PID, and bounding box coordinates."""
+    res = await asyncio.to_thread(list_desktop_windows)
+    return json.dumps(res, indent=2, ensure_ascii=False)
+
+
+@with_error_reporting("window_focus")
+async def window_focus(
+    title: Optional[str] = None,
+    window_id: Optional[int | str] = None,
+) -> str:
+    """Activate and bring the target desktop application window to the foreground."""
+    res = await asyncio.to_thread(focus_desktop_window, title=title, window_id=window_id)
+    return json.dumps(res, indent=2, ensure_ascii=False)
+
+
+@with_error_reporting("window_state")
+async def window_state(
+    action: str,
+    title: Optional[str] = None,
+    window_id: Optional[int | str] = None,
+) -> str:
+    """Change window state (maximize, minimize, restore, close)."""
+    res = await asyncio.to_thread(set_desktop_window_state, action=action, title=title, window_id=window_id)
+    return json.dumps(res, indent=2, ensure_ascii=False)
+
+
+@with_error_reporting("clipboard_write")
+async def clipboard_write(text: str) -> str:
+    """Copy text string to the operating system clipboard."""
+    res = await asyncio.to_thread(copy_to_clipboard, text=text)
+    return json.dumps(res, indent=2, ensure_ascii=False)
+
+
+@with_error_reporting("clipboard_read")
+async def clipboard_read() -> str:
+    """Read the current text contents from the operating system clipboard."""
+    res = await asyncio.to_thread(read_from_clipboard)
+    return json.dumps(res, indent=2, ensure_ascii=False)
+
+
+@with_error_reporting("system_info")
+async def system_info() -> str:
+    """Retrieve structured operating system health, CPU, memory, disk, and process telemetry."""
+    res = await asyncio.to_thread(get_system_metrics)
+    return json.dumps(res, indent=2, ensure_ascii=False)
+
