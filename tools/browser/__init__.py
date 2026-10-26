@@ -9,16 +9,44 @@ import json
 from typing import Any, Optional
 
 from core.reporter import with_error_reporting
-from tools.browser.manager import BrowserManager, has_gui_display, safe_print
+from tools.browser.manager import (
+    BrowserManager,
+    find_installed_browser,
+    has_gui_display,
+    is_cdp_port_active,
+    launch_user_browser_with_cdp,
+    safe_print,
+)
 
 
 @with_error_reporting("browser_open")
-async def browser_open(url: str, headless: Optional[bool] = None, fast_mode: bool = True) -> str:
-    """Launch browser session and navigate to target URL.
-    Attempts headed desktop window first; automatically falls back to headless mode on VPS/remote machines.
+async def browser_open(
+    url: str,
+    headless: Optional[bool] = None,
+    fast_mode: bool = True,
+    target: str = "auto",
+    browser_name: Optional[str] = None,
+    cdp_port: int = 9222,
+) -> str:
+    """Launch browser session or attach to user's everyday browser and navigate to target URL.
+
+    Args:
+        url: Target webpage URL to visit.
+        headless: Force headless background mode (omits visible window) for isolated sandbox.
+        fast_mode: Block heavy ad networks and tracking beacons for maximum speed.
+        target: 'auto' (detect live user browser or fallback to sandbox), 'user' (everyday Chrome/Edge/Brave with live logins via CDP), or 'isolated' (dedicated Playwright sandbox).
+        browser_name: Specific browser to target ('chrome', 'edge', 'brave') if multiple exist.
+        cdp_port: Chrome DevTools Protocol remote debugging port (default: 9222).
     """
     mgr = BrowserManager.get_instance()
-    res = await mgr.open(url=url, headless=headless, fast_mode=fast_mode)
+    res = await mgr.open(
+        url=url,
+        headless=headless,
+        fast_mode=fast_mode,
+        target=target,
+        browser_name=browser_name,
+        cdp_port=cdp_port,
+    )
     return json.dumps(res, indent=2, ensure_ascii=False)
 
 
@@ -82,6 +110,9 @@ __all__ = [
     "BrowserManager",
     "has_gui_display",
     "safe_print",
+    "find_installed_browser",
+    "is_cdp_port_active",
+    "launch_user_browser_with_cdp",
     "browser_open",
     "browser_click",
     "browser_type",

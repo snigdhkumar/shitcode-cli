@@ -27,7 +27,7 @@ SCREENSHOTS_DIR = ROOT_DIR / "screenshots"
 
 def has_gui_display() -> bool:
     """Detect if the current environment has a physical/desktop display available."""
-    if sys.platform in ("win32", "darwin"):
+    if sys.platform == "win32":
         return True
     return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
 
@@ -53,8 +53,108 @@ def safe_print(text: str = ""):
             pass
 
 
+def find_installed_browser(browser_name: Optional[str] = None) -> Optional[Dict[str, str]]:
+    """Locate executable binary for Chrome, Edge, or Brave on the current system.
+
+    Args:
+        browser_name: Optional filter ('chrome', 'edge', 'brave').
+
+    Returns:
+        Dict with 'name' and 'path' if found, else None.
+    """
+    import shutil
+
+    name_filter = browser_name.lower().strip() if browser_name else None
+
+    if sys.platform == "win32":
+        candidates = {
+            "chrome": [
+                r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+                os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
+                os.path.expandvars(r"%PROGRAMFILES%\Google\Chrome\Application\chrome.exe"),
+                os.path.expandvars(r"%PROGRAMFILES(X86)%\Google\Chrome\Application\chrome.exe"),
+            ],
+            "edge": [
+                r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+                r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+                os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\Edge\Application\msedge.exe"),
+                os.path.expandvars(r"%PROGRAMFILES(X86)%\Microsoft\Edge\Application\msedge.exe"),
+            ],
+            "brave": [
+                r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe",
+                r"C:\Program Files (x86)\BraveSoftware\Brave-Browser\Application\brave.exe",
+                os.path.expandvars(r"%LOCALAPPDATA%\BraveSoftware\Brave-Browser\Application\brave.exe"),
+                os.path.expandvars(r"%PROGRAMFILES%\BraveSoftware\Brave-Browser\Application\brave.exe"),
+            ],
+        }
+
+        search_order = [name_filter] if name_filter and name_filter in candidates else ["chrome", "edge", "brave"]
+        for b_name in search_order:
+            for p in candidates.get(b_name, []):
+                if os.path.isfile(p):
+                    return {"name": b_name, "path": p}
+
+    else:
+        linux_candidates = {
+            "chrome": ["google-chrome", "google-chrome-stable", "chromium", "chromium-browser"],
+            "edge": ["microsoft-edge", "microsoft-edge-stable"],
+            "brave": ["brave-browser", "brave"],
+        }
+        search_order = [name_filter] if name_filter and name_filter in linux_candidates else ["chrome", "edge", "brave"]
+        for b_name in search_order:
+            for bin_name in linux_candidates.get(b_name, []):
+                which_path = shutil.which(bin_name)
+                if which_path:
+                    return {"name": b_name, "path": which_path}
+
+    return None
+
+
+def is_cdp_port_active(host: str = "127.0.0.1", port: int = 9222, timeout: float = 0.5) -> bool:
+    """Check if the Chrome DevTools Protocol port is open and accepting TCP connections."""
+    import socket
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except (socket.timeout, ConnectionRefusedError, OSError):
+        return False
+
+
+def launch_user_browser_with_cdp(
+    browser_path: str,
+    port: int = 9222,
+    custom_user_data_dir: Optional[str] = None
+) -> bool:
+    """Launch user browser executable in a background detached process with remote debugging enabled."""
+    import subprocess
+    args = [browser_path, f"--remote-debugging-port={port}", "--no-first-run", "--no-default-browser-check"]
+    if custom_user_data_dir:
+        args.append(f"--user-data-dir={custom_user_data_dir}")
+    try:
+        if sys.platform == "win32":
+            subprocess.Popen(
+                args,
+                creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                close_fds=True,
+            )
+        else:
+            subprocess.Popen(
+                args,
+                start_new_session=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        return True
+    except Exception as e:
+        logger.warning(f"Failed to spawn user browser {browser_path}: {e}")
+        return False
+
+
 class BrowserManager:
-    """Singleton controller managing the active Playwright browser session with persistent user profile."""
+    """Singleton controller managing the active Playwright browser session with persistent user profile and CDP bridge."""
 
     _instance: Optional[BrowserManager] = None
 
@@ -78,9 +178,13 @@ class BrowserManager:
     def __init__(self):
         self._playwright: Optional[Any] = None
         self._context: Optional[Any] = None
+        self._cdp_browser: Optional[Any] = None
         self._page: Optional[Any] = None
         self._is_headless: bool = False
         self._was_installed_on_demand: bool = False
+        self._is_cdp: bool = False
+        self._browser_target: str = "isolated"
+        self._created_cdp_page: bool = False
         self._lock = asyncio.Lock()
 
     @classmethod
@@ -130,6 +234,62 @@ class BrowserManager:
             await context.route("**/*", _route_handler)
         except Exception as e:
             logger.debug(f"Route interception attach notice: {e}")
+
+    async def _connect_cdp(self, cdp_url: str, url: str) -> Dict[str, Any]:
+        """Attach to a running user Chromium browser session via Chrome DevTools Protocol."""
+        try:
+            from playwright.async_api import async_playwright
+        except ImportError:
+            return {"success": False, "error": "Playwright module not found."}
+
+        if self._playwright is None:
+            self._playwright = await async_playwright().start()
+
+        try:
+            self._cdp_browser = await self._playwright.chromium.connect_over_cdp(cdp_url)
+        except Exception as e:
+            return {"success": False, "error": f"Failed to connect to CDP endpoint at {cdp_url}: {e}"}
+
+        contexts = self._cdp_browser.contexts
+        if contexts:
+            self._context = contexts[0]
+        else:
+            self._context = await self._cdp_browser.new_context()
+
+        # If context has an existing blank page, reuse it; otherwise create a new tab so we don't overwrite user's tabs
+        target_page = None
+        if self._context.pages:
+            for p in self._context.pages:
+                if p.url in ("about:blank", "chrome://newtab/", "edge://newtab/"):
+                    target_page = p
+                    self._created_cdp_page = False
+                    break
+        if target_page is None:
+            target_page = await self._context.new_page()
+            self._created_cdp_page = True
+
+        self._page = target_page
+        self._is_cdp = True
+        self._browser_target = "user"
+        self._is_headless = False
+
+        try:
+            await self._page.goto(url, wait_until="domcontentloaded", timeout=15000)
+        except Exception as e:
+            cur = self._page.url
+            if not (cur and cur != "about:blank"):
+                raise e
+
+        title = await self._page.title()
+        return {
+            "success": True,
+            "url": self._page.url,
+            "title": title,
+            "mode": "CDP Bridge (User Everyday Browser)",
+            "target": "user",
+            "profile": "User Default Profile (Live Logins & Cookies)",
+            "message": f"Connected to user everyday browser via CDP and opened {self._page.url} ('{title}')",
+        }
 
     async def _launch_browser(self, headless_preference: Optional[bool] = None) -> Tuple[Any, bool]:
         """Launch Chromium browser context using 3-tier resilient fallback."""
@@ -220,8 +380,105 @@ class BrowserManager:
 
         raise RuntimeError(f"Could not launch browser: {last_error}")
 
-    async def _open_internal(self, url: str, headless: Optional[bool] = None, fast_mode: bool = True) -> Dict[str, Any]:
+    async def _open_internal(
+        self,
+        url: str,
+        headless: Optional[bool] = None,
+        fast_mode: bool = True,
+        target: str = "auto",
+        browser_name: Optional[str] = None,
+        cdp_port: int = 9222,
+    ) -> Dict[str, Any]:
         """Internal routine to navigate/open browser without acquiring self._lock (caller must manage lock)."""
+        if not url.startswith(("http://", "https://", "about:", "file://")):
+            url = "https://" + url
+
+        target_norm = (target or "auto").lower().strip()
+
+        # Check if already active and compatible with requested target
+        if self.is_active():
+            need_switch = (
+                (target_norm == "user" and not self._is_cdp) or
+                (target_norm == "isolated" and self._is_cdp)
+            )
+            if need_switch:
+                logger.info(f"Switching browser session from {'CDP user' if self._is_cdp else 'isolated sandbox'} to {target_norm}...")
+                await self._cleanup()
+            elif has_gui_display() and self._is_headless and target_norm != "user":
+                logger.info("Upgrading background headless session to visible desktop window...")
+                await self._cleanup()
+            else:
+                try:
+                    await self._page.goto(url, wait_until="domcontentloaded", timeout=15000)
+                    title = await self._page.title()
+                    mode_desc = "CDP Bridge (User Everyday Browser)" if self._is_cdp else ("headless" if self._is_headless else "headed (Visible Desktop Window)")
+                    prof_desc = "User Profile (Live Logins & Cookies)" if self._is_cdp else "persistent (.browser_profile)"
+                    return {
+                        "success": True,
+                        "url": self._page.url,
+                        "title": title,
+                        "mode": mode_desc,
+                        "target": self._browser_target,
+                        "profile": prof_desc,
+                        "message": f"Navigated existing tab to {self._page.url} ('{title}')",
+                    }
+                except Exception as e:
+                    cur = self._page.url
+                    if cur and cur != "about:blank":
+                        title = await self._page.title()
+                        mode_desc = "CDP Bridge (User Everyday Browser)" if self._is_cdp else ("headless" if self._is_headless else "headed (Visible Desktop Window)")
+                        return {
+                            "success": True,
+                            "url": cur,
+                            "title": title,
+                            "mode": mode_desc,
+                            "target": self._browser_target,
+                            "profile": "User Profile" if self._is_cdp else "persistent (.browser_profile)",
+                            "message": f"Navigated existing tab to {cur} ('{title}') with notice: {e}",
+                        }
+                    logger.warning(f"Failed to navigate existing page, restarting browser session: {e}")
+                    await self._cleanup()
+
+        # Tier 1: User requested everyday browser or auto-detect
+        if target_norm in ("user", "auto"):
+            cdp_url = f"http://127.0.0.1:{cdp_port}"
+            port_active = is_cdp_port_active("127.0.0.1", cdp_port)
+
+            if not port_active and target_norm == "user":
+                info = find_installed_browser(browser_name)
+                if info:
+                    logger.info(f"Attempting to launch {info['name']} with --remote-debugging-port={cdp_port}...")
+                    launch_user_browser_with_cdp(info["path"], port=cdp_port)
+                    for _ in range(15):
+                        await asyncio.sleep(0.2)
+                        if is_cdp_port_active("127.0.0.1", cdp_port):
+                            port_active = True
+                            break
+
+            if port_active:
+                logger.info(f"Connecting to user browser over CDP at {cdp_url}...")
+                res = await self._connect_cdp(cdp_url, url)
+                if res.get("success"):
+                    return res
+                elif target_norm == "user":
+                    return res
+                else:
+                    logger.warning(f"CDP connection attempt notice: {res.get('error')}. Falling back to isolated sandbox.")
+            elif target_norm == "user":
+                info = find_installed_browser(browser_name)
+                b_name = info["name"].title() if info else "Chrome / Edge"
+                return {
+                    "success": False,
+                    "target": "user",
+                    "error": (
+                        f"Could not connect to user browser at {cdp_url}. "
+                        f"If {b_name} is already running, please restart it with '--remote-debugging-port={cdp_port}', "
+                        f"or call browser_open with target='isolated' to use the dedicated Playwright sandbox."
+                    ),
+                    "hint": f"Run command: '{info['path'] if info else 'chrome.exe'} --remote-debugging-port={cdp_port}'"
+                }
+
+        # Tier 2: Isolated Playwright sandbox fallback (or explicit target='isolated')
         ready, msg = await self._ensure_ready()
         if not ready:
             return {"success": False, "error": f"Failed to initialize browser engine: {msg}"}
@@ -231,46 +488,14 @@ class BrowserManager:
         except ImportError:
             return {"success": False, "error": "Playwright module not found after setup."}
 
-        if not url.startswith(("http://", "https://", "about:", "file://")):
-            url = "https://" + url
-
-        if self.is_active():
-            if has_gui_display() and self._is_headless:
-                logger.info("Upgrading background headless session to visible desktop window...")
-                await self._cleanup()
-            else:
-                try:
-                    await self._page.goto(url, wait_until="domcontentloaded", timeout=15000)
-                    title = await self._page.title()
-                    return {
-                        "success": True,
-                        "url": self._page.url,
-                        "title": title,
-                        "mode": "headless" if self._is_headless else "headed (Visible Desktop Window)",
-                        "profile": "persistent (.browser_profile)",
-                        "message": f"Navigated existing tab to {self._page.url} ('{title}')",
-                    }
-                except Exception as e:
-                    cur = self._page.url
-                    if cur and cur != "about:blank":
-                        title = await self._page.title()
-                        return {
-                            "success": True,
-                            "url": cur,
-                            "title": title,
-                            "mode": "headless" if self._is_headless else "headed (Visible Desktop Window)",
-                            "profile": "persistent (.browser_profile)",
-                            "message": f"Navigated existing tab to {cur} ('{title}') with notice: {e}",
-                        }
-                    logger.warning(f"Failed to navigate existing page, restarting browser: {e}")
-                    await self._cleanup()
-
         if self._playwright is None:
             self._playwright = await async_playwright().start()
 
         try:
             self._context, self._is_headless = await self._launch_browser(headless_preference=headless)
             await self._setup_route_interception(self._context, fast_mode=fast_mode)
+            self._is_cdp = False
+            self._browser_target = "isolated"
         except Exception as launch_err:
             await self._cleanup()
             return {"success": False, "error": f"Failed to launch browser: {launch_err}"}
@@ -295,6 +520,7 @@ class BrowserManager:
                 "url": self._page.url,
                 "title": title,
                 "mode": mode_str,
+                "target": "isolated",
                 "profile": "persistent (.browser_profile)",
                 "message": f"Browser launched in {mode_str} with persistent profile and opened {self._page.url} ('{title}')",
             }
@@ -311,6 +537,7 @@ class BrowserManager:
                 "url": url,
                 "title": "Loaded",
                 "mode": mode_str,
+                "target": "isolated",
                 "profile": "persistent (.browser_profile)",
                 "warning": f"Opened with navigation notice: {nav_err}",
                 "message": f"Browser opened to '{url}' (Notice: {nav_err})",
@@ -321,10 +548,25 @@ class BrowserManager:
                 self._was_installed_on_demand = False
             return res
 
-    async def open(self, url: str, headless: Optional[bool] = None, fast_mode: bool = True) -> Dict[str, Any]:
-        """Launch browser session with persistent user profile and navigate to target URL."""
+    async def open(
+        self,
+        url: str,
+        headless: Optional[bool] = None,
+        fast_mode: bool = True,
+        target: str = "auto",
+        browser_name: Optional[str] = None,
+        cdp_port: int = 9222,
+    ) -> Dict[str, Any]:
+        """Launch or attach to browser session (user everyday browser via CDP or isolated sandbox) and navigate to target URL."""
         async with self._lock:
-            return await self._open_internal(url=url, headless=headless, fast_mode=fast_mode)
+            return await self._open_internal(
+                url=url,
+                headless=headless,
+                fast_mode=fast_mode,
+                target=target,
+                browser_name=browser_name,
+                cdp_port=cdp_port,
+            )
 
     async def click(self, selector: str, text: Optional[str] = None) -> Dict[str, Any]:
         """Click an interactive element on the page."""
@@ -768,20 +1010,56 @@ class BrowserManager:
             return await self._cleanup()
 
     async def _cleanup(self) -> Dict[str, Any]:
-        """Internal cleanup closing pages, context, and driver."""
-        try:
-            if self._context:
-                await self._context.close()
-        except Exception as e:
-            logger.debug(f"Context close error: {e}")
+        """Internal cleanup closing pages, context, and driver (disconnects CDP without killing user's browser)."""
+        is_cdp = self._is_cdp
 
-        try:
-            if self._playwright:
-                await self._playwright.stop()
-        except Exception as e:
-            logger.debug(f"Playwright stop error: {e}")
+        if is_cdp:
+            try:
+                if self._page and not self._page.is_closed():
+                    if getattr(self, "_created_cdp_page", False):
+                        await self._page.close()
+            except Exception as e:
+                logger.debug(f"CDP page close error: {e}")
 
-        self._page = None
-        self._context = None
-        self._playwright = None
-        return {"success": True, "message": "Browser session closed successfully (user profile saved)."}
+            try:
+                if self._cdp_browser:
+                    # Disconnect client from remote browser; does not kill user's browser process
+                    await self._cdp_browser.close()
+            except Exception as e:
+                logger.debug(f"CDP browser disconnect error: {e}")
+
+            try:
+                if self._playwright:
+                    await self._playwright.stop()
+            except Exception as e:
+                logger.debug(f"Playwright stop error: {e}")
+
+            self._page = None
+            self._context = None
+            self._cdp_browser = None
+            self._playwright = None
+            self._is_cdp = False
+            self._browser_target = "isolated"
+            self._created_cdp_page = False
+            return {
+                "success": True,
+                "message": "CDP connection to user browser disconnected successfully. Your browser window remains open.",
+            }
+        else:
+            try:
+                if self._context:
+                    await self._context.close()
+            except Exception as e:
+                logger.debug(f"Context close error: {e}")
+
+            try:
+                if self._playwright:
+                    await self._playwright.stop()
+            except Exception as e:
+                logger.debug(f"Playwright stop error: {e}")
+
+            self._page = None
+            self._context = None
+            self._playwright = None
+            self._browser_target = "isolated"
+            return {"success": True, "message": "Browser session closed successfully (user profile saved)."}
