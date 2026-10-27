@@ -119,22 +119,33 @@ def focus_desktop_window(
             if not target_hwnd:
                 return {"success": False, "error": f"No visible window found matching '{title or window_id}'."}
 
-            current_thread = win32process.GetCurrentThreadId()
+            current_thread = ctypes.windll.kernel32.GetCurrentThreadId()
             target_thread, _ = win32process.GetWindowThreadProcessId(target_hwnd)
 
+            attached = False
             try:
-                if current_thread != target_thread:
-                    ctypes.windll.user32.AttachThreadInput(current_thread, target_thread, True)
+                if current_thread and target_thread and current_thread != target_thread:
+                    attached = bool(ctypes.windll.user32.AttachThreadInput(current_thread, target_thread, True))
 
                 if win32gui.IsIconic(target_hwnd):
                     win32gui.ShowWindow(target_hwnd, win32con.SW_RESTORE)
                 else:
                     win32gui.ShowWindow(target_hwnd, win32con.SW_SHOW)
 
-                win32gui.SetForegroundWindow(target_hwnd)
-                ctypes.windll.user32.BringWindowToTop(target_hwnd)
+                try:
+                    win32gui.SetForegroundWindow(target_hwnd)
+                except Exception:
+                    pass
+                try:
+                    ctypes.windll.user32.BringWindowToTop(target_hwnd)
+                except Exception:
+                    pass
+                try:
+                    ctypes.windll.user32.SetFocus(target_hwnd)
+                except Exception:
+                    pass
             finally:
-                if current_thread != target_thread:
+                if attached:
                     ctypes.windll.user32.AttachThreadInput(current_thread, target_thread, False)
 
             matched_title = win32gui.GetWindowText(target_hwnd)

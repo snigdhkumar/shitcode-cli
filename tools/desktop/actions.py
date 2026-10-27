@@ -548,7 +548,13 @@ async def computer_actions(actions: list) -> Any:
 async def windows_list() -> str:
     """List all open desktop application windows with title, PID, and bounding box coordinates."""
     res = await asyncio.to_thread(list_desktop_windows)
-    return json.dumps(res, indent=2, ensure_ascii=False)
+    if not res:
+        return "No visible desktop windows found."
+    lines = [f"Found {len(res)} open desktop window(s):"]
+    for w in res:
+        lines.append(f"- [ID: {w.get('id')}] \"{w.get('title', '')}\" (PID: {w.get('pid')}, Bounds: {w.get('bounds')})")
+    lines.append("\nJSON representation:\n" + json.dumps(res, indent=2, ensure_ascii=False))
+    return "\n".join(lines)
 
 
 @with_error_reporting("window_focus")
