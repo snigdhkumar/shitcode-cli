@@ -267,6 +267,97 @@ async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> Any:
     return str(result) if result is not None else ""
 
 
+async def handle_tool_call_worker(
+    call_id: str,
+    tool_name: str,
+    arguments: Dict[str, Any],
+    req_entry: Dict[str, Any],
+    state: ClientState,
+    ws: websockets.WebSocketClientProtocol,
+    ws_send_lock: asyncio.Lock,
+    permission_lock: asyncio.Lock,
+):
+    """Execute a tool call in an independent non-blocking task with safety timeout and concurrency support."""
+    if state.ask_permission:
+        async with permission_lock:
+            perm_result = await confirm_tool_execution(tool_name, arguments, state)
+            if perm_result == "always":
+                state.ask_permission = False
+                set_ask_permission(False)
+                state.recently_changed_fields.add("security")
+                print(f"         {YELLOW}● Switched to Auto-Approve for the remainder of this session.{RESET}")
+            elif perm_result == "quit":
+                print(f"         {RED}● Session stopped by user.{RESET}")
+                state.is_running = False
+                await ws.close()
+                return
+            elif perm_result == "deny":
+                req_entry["status"] = "declined"
+                print(f"         {RED}[-] Action declined by user.{RESET}")
+                async with ws_send_lock:
+                    await ws.send(json.dumps({
+                        "type": "tool_result",
+                        "call_id": call_id,
+                        "success": False,
+                        "error": "Action declined by user on local machine.",
+                    }))
+                return
+
+    t_start = time.perf_counter()
+    tool_timeout = float(arguments.get("timeout", 60.0))
+    try:
+        output = await asyncio.wait_for(execute_tool(tool_name, arguments), timeout=tool_timeout)
+        elapsed_ms = int((time.perf_counter() - t_start) * 1000)
+        is_visual = isinstance(output, dict) and "content" in output
+        req_entry["status"] = "completed"
+        req_entry["elapsed_ms"] = elapsed_ms
+        req_entry["is_visual"] = is_visual
+        if is_visual:
+            print(f"         {GREEN}[+] Completed in {elapsed_ms}ms{RESET} {CYAN}(Returned visual image payload to AI){RESET}")
+        else:
+            print(f"         {GREEN}[+] Completed in {elapsed_ms}ms{RESET} {DIM}(Returned result to AI){RESET}")
+
+        response = {
+            "type": "tool_result",
+            "call_id": call_id,
+            "success": True,
+            "result": output,
+        }
+    except asyncio.TimeoutError:
+        elapsed_ms = int((time.perf_counter() - t_start) * 1000)
+        timeout_msg = f"Tool '{tool_name}' timed out after {int(tool_timeout)}s on local machine. Try narrowing arguments or increasing timeout."
+        req_entry["status"] = "error"
+        req_entry["elapsed_ms"] = elapsed_ms
+        req_entry["error"] = timeout_msg
+        print(f"         {RED}[!] Execution timeout ({elapsed_ms}ms): {timeout_msg}{RESET}")
+
+        response = {
+            "type": "tool_result",
+            "call_id": call_id,
+            "success": False,
+            "error": timeout_msg,
+        }
+    except Exception as e:
+        elapsed_ms = int((time.perf_counter() - t_start) * 1000)
+        req_entry["status"] = "error"
+        req_entry["elapsed_ms"] = elapsed_ms
+        req_entry["error"] = str(e)
+        print(f"         {RED}[!] Execution error ({elapsed_ms}ms): {e}{RESET}")
+
+        response = {
+            "type": "tool_result",
+            "call_id": call_id,
+            "success": False,
+            "error": str(e),
+        }
+
+    async with ws_send_lock:
+        try:
+            await ws.send(json.dumps(response))
+        except Exception:
+            pass
+
+
 async def run_client_loop(
     device_token: str,
     workspace_dir: str,
@@ -309,6 +400,9 @@ async def run_client_loop(
             async with websockets.connect(url, ping_interval=20, ping_timeout=20) as ws:
                 state.ws = ws
                 backoff = 2
+                ws_send_lock = asyncio.Lock()
+                permission_lock = asyncio.Lock()
+                active_tool_tasks: set[asyncio.Task] = set()
 
                 welcome_raw = await ws.recv()
                 try:
@@ -383,68 +477,32 @@ async def run_client_loop(
                         state.last_ai_request = req_entry
                         print(format_ai_request(tool_name, arguments, t_stamp, expanded=getattr(state, "expanded_request_view", False)))
 
-                        if state.ask_permission:
-                            perm_result = await confirm_tool_execution(tool_name, arguments, state)
-                            if perm_result == "always":
-                                state.ask_permission = False
-                                set_ask_permission(False)
-                                state.recently_changed_fields.add("security")
-                                print(f"         {YELLOW}● Switched to Auto-Approve for the remainder of this session.{RESET}")
-                            elif perm_result == "quit":
-                                print(f"         {RED}● Session stopped by user.{RESET}")
-                                state.is_running = False
-                                await ws.close()
-                                return
-                            elif perm_result == "deny":
-                                req_entry["status"] = "declined"
-                                print(f"         {RED}[-] Action declined by user.{RESET}")
-                                await ws.send(json.dumps({
-                                    "type": "tool_result",
-                                    "call_id": call_id,
-                                    "success": False,
-                                    "error": "Action declined by user on local machine.",
-                                }))
-                                continue
-
-                        t_start = time.perf_counter()
-                        try:
-                            output = await execute_tool(tool_name, arguments)
-                            elapsed_ms = int((time.perf_counter() - t_start) * 1000)
-                            is_visual = isinstance(output, dict) and "content" in output
-                            req_entry["status"] = "completed"
-                            req_entry["elapsed_ms"] = elapsed_ms
-                            req_entry["is_visual"] = is_visual
-                            if is_visual:
-                                print(f"         {GREEN}[+] Completed in {elapsed_ms}ms{RESET} {CYAN}(Returned visual image payload to AI){RESET}")
-                            else:
-                                print(f"         {GREEN}[+] Completed in {elapsed_ms}ms{RESET} {DIM}(Returned result to AI){RESET}")
-
-                            response = {
-                                "type": "tool_result",
-                                "call_id": call_id,
-                                "success": True,
-                                "result": output,
-                            }
-                        except Exception as e:
-                            elapsed_ms = int((time.perf_counter() - t_start) * 1000)
-                            req_entry["status"] = "error"
-                            req_entry["elapsed_ms"] = elapsed_ms
-                            req_entry["error"] = str(e)
-                            print(f"         {RED}[!] Execution error ({elapsed_ms}ms): {e}{RESET}")
-
-                            response = {
-                                "type": "tool_result",
-                                "call_id": call_id,
-                                "success": False,
-                                "error": str(e),
-                            }
-
-                        await ws.send(json.dumps(response))
+                        # Dispatch tool execution as an independent non-blocking task
+                        task = asyncio.create_task(
+                            handle_tool_call_worker(
+                                call_id,
+                                tool_name,
+                                arguments,
+                                req_entry,
+                                state,
+                                ws,
+                                ws_send_lock,
+                                permission_lock,
+                            )
+                        )
+                        active_tool_tasks.add(task)
+                        task.add_done_callback(active_tool_tasks.discard)
 
                     elif msg_type == "ping":
-                        await ws.send(json.dumps({"type": "pong"}))
+                        async with ws_send_lock:
+                            await ws.send(json.dumps({"type": "pong"}))
 
         except websockets.exceptions.ConnectionClosed as cc:
+            for t in list(active_tool_tasks):
+                if not t.done():
+                    t.cancel()
+            active_tool_tasks.clear()
+
             if not state.is_running:
                 break
 
