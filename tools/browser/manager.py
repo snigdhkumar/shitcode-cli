@@ -121,16 +121,37 @@ def is_cdp_port_active(host: str = "127.0.0.1", port: int = 9222, timeout: float
         return False
 
 
+def is_browser_process_running(browser_name: Optional[str] = None) -> bool:
+    """Detect if any process of Chrome, Edge, or Brave is currently active."""
+    import psutil
+    target = (browser_name or "").lower().strip()
+    keywords = ["chrome", "msedge", "edge", "brave"]
+    for proc in psutil.process_iter(["name"]):
+        try:
+            pname = (proc.info.get("name") or "").lower()
+            if target:
+                if (target == "chrome" and "chrome" in pname) or \
+                   (target in ("edge", "msedge") and "edge" in pname) or \
+                   (target == "brave" and "brave" in pname):
+                    return True
+            else:
+                if any(kw in pname for kw in keywords):
+                    return True
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+    return False
+
+
 def launch_user_browser_with_cdp(
     browser_path: str,
     port: int = 9222,
-    custom_user_data_dir: Optional[str] = None
 ) -> bool:
-    """Launch user browser executable in a background detached process with remote debugging enabled."""
+    """Launch user browser executable in a background detached process with remote debugging enabled.
+    
+    Always launches using the user's genuine default profile without custom --user-data-dir shadow directories.
+    """
     import subprocess
     args = [browser_path, f"--remote-debugging-port={port}", "--no-first-run", "--no-default-browser-check"]
-    if custom_user_data_dir:
-        args.append(f"--user-data-dir={custom_user_data_dir}")
     try:
         if sys.platform == "win32":
             subprocess.Popen(
@@ -272,6 +293,26 @@ class BrowserManager:
         self._is_cdp = True
         self._browser_target = "user"
         self._is_headless = False
+
+        # Configure native download behavior over CDP so downloads automatically save to user's Downloads folder
+        try:
+            downloads_dir = (
+                os.environ.get("USERPROFILE") and os.path.join(os.environ["USERPROFILE"], "Downloads")
+            ) or os.path.expanduser("~/Downloads")
+            if os.path.exists(downloads_dir):
+                cdp_session = await self._context.new_cdp_session(self._page)
+                await cdp_session.send("Browser.setDownloadBehavior", {
+                    "behavior": "allow",
+                    "downloadPath": downloads_dir,
+                    "eventsEnabled": True
+                })
+                await cdp_session.send("Page.setDownloadBehavior", {
+                    "behavior": "allow",
+                    "downloadPath": downloads_dir
+                })
+                logger.info(f"CDP native download behavior initialized -> {downloads_dir}")
+        except Exception as dl_err:
+            logger.debug(f"CDP download behavior initialization notice: {dl_err}")
 
         try:
             await self._page.goto(url, wait_until="domcontentloaded", timeout=15000)
@@ -444,10 +485,29 @@ class BrowserManager:
             cdp_url = f"http://127.0.0.1:{cdp_port}"
             port_active = is_cdp_port_active("127.0.0.1", cdp_port)
 
-            if not port_active and target_norm == "user":
+            if not port_active:
                 info = find_installed_browser(browser_name)
-                if info:
-                    logger.info(f"Attempting to launch {info['name']} with --remote-debugging-port={cdp_port}...")
+                b_name = info["name"].title() if info else "Chrome / Edge"
+                browser_running = is_browser_process_running(browser_name)
+
+                if browser_running:
+                    if target_norm == "user":
+                        return {
+                            "success": False,
+                            "target": "user",
+                            "error": (
+                                f"{b_name} is currently running on your computer without remote debugging enabled (port {cdp_port} refused).\n"
+                                f"Because Chrome only enables remote debugging on initial startup, please either:\n"
+                                f"1. Fully close {b_name} and reopen it with: '{info['path'] if info else 'chrome.exe'} --remote-debugging-port={cdp_port}'\n"
+                                f"2. Or call browser_open with target='isolated' to use the dedicated clean ShitCode browser without affecting your open tabs.\n"
+                                f"DO NOT invent or create custom --user-data-dir shadow directories."
+                            ),
+                            "hint": "Call browser_open(url=..., target='isolated') for instant automation, or reopen your browser with remote debugging."
+                        }
+                    else:
+                        logger.info(f"{b_name} is running without remote debugging; using isolated sandbox for automation.")
+                elif info and target_norm == "user":
+                    logger.info(f"Attempting to launch {b_name} with --remote-debugging-port={cdp_port}...")
                     launch_user_browser_with_cdp(info["path"], port=cdp_port)
                     for _ in range(15):
                         await asyncio.sleep(0.2)

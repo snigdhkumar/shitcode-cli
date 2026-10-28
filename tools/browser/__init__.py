@@ -13,6 +13,7 @@ from tools.browser.manager import (
     BrowserManager,
     find_installed_browser,
     has_gui_display,
+    is_browser_process_running,
     is_cdp_port_active,
     launch_user_browser_with_cdp,
     safe_print,
@@ -34,7 +35,7 @@ async def browser_open(
         url: Target webpage URL to visit.
         headless: Force headless background mode (omits visible window) for isolated sandbox.
         fast_mode: Block heavy ad networks and tracking beacons for maximum speed.
-        target: 'auto' (detect live user browser or fallback to sandbox), 'user' (everyday Chrome/Edge/Brave with live logins via CDP), or 'isolated' (dedicated Playwright sandbox).
+        target: 'auto' (detect live user browser or fallback to sandbox), 'user' (everyday Chrome/Edge/Brave with live logins via CDP), or 'isolated' (dedicated clean Playwright sandbox). Note: Never invent or pass custom --user-data-dir shadow directories.
         browser_name: Specific browser to target ('chrome', 'edge', 'brave') if multiple exist.
         cdp_port: Chrome DevTools Protocol remote debugging port (default: 9222).
     """
