@@ -174,6 +174,47 @@ def launch_user_browser_with_cdp(
         return False
 
 
+def close_browser_processes(browser_name: Optional[str] = "chrome") -> int:
+    """Terminate any running operating system processes for the specified browser."""
+    import psutil
+    target = (browser_name or "chrome").lower().strip()
+    keywords = ["chrome", "msedge", "edge", "brave"]
+    killed = 0
+    for proc in psutil.process_iter(["name", "cmdline"]):
+        try:
+            pname = (proc.info.get("name") or "").lower()
+            matched = False
+            if target == "chrome" and "chrome" in pname:
+                matched = True
+            elif target in ("edge", "msedge") and ("edge" in pname and "webview" not in pname):
+                matched = True
+            elif target == "brave" and "brave" in pname:
+                matched = True
+            elif not target and any(kw in pname for kw in keywords):
+                matched = True
+            
+            if matched:
+                proc.terminate()
+                killed += 1
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+
+    if killed > 0:
+        time.sleep(1.0)
+        for proc in psutil.process_iter(["name"]):
+            try:
+                pname = (proc.info.get("name") or "").lower()
+                if (target == "chrome" and "chrome" in pname) or \
+                   (target in ("edge", "msedge") and "edge" in pname and "webview" not in pname) or \
+                   (target == "brave" and "brave" in pname):
+                    proc.kill()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+        time.sleep(0.5)
+
+    return killed
+
+
 class BrowserManager:
     """Singleton controller managing the active Playwright browser session with persistent user profile and CDP bridge."""
 
@@ -429,6 +470,7 @@ class BrowserManager:
         target: str = "auto",
         browser_name: Optional[str] = None,
         cdp_port: int = 9222,
+        force_restart: bool = False,
     ) -> Dict[str, Any]:
         """Internal routine to navigate/open browser without acquiring self._lock (caller must manage lock)."""
         if not url.startswith(("http://", "https://", "about:", "file://")):
@@ -488,29 +530,58 @@ class BrowserManager:
             if not port_active:
                 info = find_installed_browser(browser_name)
                 b_name = info["name"].title() if info else "Chrome / Edge"
+
+                # Special detection for Microsoft Edge:
+                if info and info["name"] == "edge" and target_norm == "user":
+                    return {
+                        "success": False,
+                        "target": "user",
+                        "browser": "edge",
+                        "error": (
+                            "Microsoft Edge blocks remote debugging on its default Windows user profile by design.\n"
+                            "Recommendation: Please use Google Chrome or Brave for everyday browser automation (target='user', browser_name='chrome'), "
+                            "or call browser_open with target='isolated' to use ShitCode's clean dedicated browser sandbox."
+                        ),
+                        "hint": "Call browser_open(url=..., target='user', browser_name='chrome') to use Chrome, or target='isolated' for sandbox."
+                    }
+
                 browser_running = is_browser_process_running(browser_name)
 
                 if browser_running:
-                    if target_norm == "user":
+                    if force_restart:
+                        logger.info(f"Force restart requested: closing existing {b_name} processes to boot in debug mode...")
+                        await asyncio.to_thread(close_browser_processes, browser_name=info["name"] if info else "chrome")
+                        browser_running = False
+                    elif target_norm == "user":
                         return {
                             "success": False,
                             "target": "user",
+                            "browser": b_name,
+                            "browser_running": True,
                             "error": (
                                 f"{b_name} is currently running on your computer without remote debugging enabled (port {cdp_port} refused).\n"
-                                f"Because Chrome only enables remote debugging on initial startup, please either:\n"
-                                f"1. Fully close {b_name} and reopen it with: '{info['path'] if info else 'chrome.exe'} --remote-debugging-port={cdp_port}'\n"
-                                f"2. Or call browser_open with target='isolated' to use the dedicated clean ShitCode browser without affecting your open tabs.\n"
-                                f"DO NOT invent or create custom --user-data-dir shadow directories."
+                                f"Because Chrome only binds remote debugging on fresh startup, it must be closed and reopened."
                             ),
-                            "hint": "Call browser_open(url=..., target='isolated') for instant automation, or reopen your browser with remote debugging."
+                            "prompt_for_user": f"{b_name} is currently open. Do you allow me to close and restart it in debugging mode so I can control it directly?",
+                            "action_on_approval": (
+                                f"Once the user approves, call browser_open(url='{url}', target='user', "
+                                f"browser_name='{info['name'] if info else 'chrome'}', force_restart=True) to automatically terminate {b_name} "
+                                f"and reboot it with remote debugging on their genuine profile."
+                            ),
+                            "alternative": (
+                                "If the user does not want to restart their browser, call browser_open(url=..., target='isolated') "
+                                "to use the clean dedicated ShitCode browser sandbox without affecting their open tabs."
+                            ),
+                            "hint": "Ask user for permission to restart, or use target='isolated'."
                         }
                     else:
                         logger.info(f"{b_name} is running without remote debugging; using isolated sandbox for automation.")
-                elif info and target_norm == "user":
-                    logger.info(f"Attempting to launch {b_name} with --remote-debugging-port={cdp_port}...")
+
+                if not browser_running and info:
+                    logger.info(f"Attempting to launch {b_name} with --remote-debugging-port={cdp_port} on user profile...")
                     launch_user_browser_with_cdp(info["path"], port=cdp_port)
-                    for _ in range(15):
-                        await asyncio.sleep(0.2)
+                    for _ in range(20):
+                        await asyncio.sleep(0.25)
                         if is_cdp_port_active("127.0.0.1", cdp_port):
                             port_active = True
                             break
@@ -616,6 +687,7 @@ class BrowserManager:
         target: str = "auto",
         browser_name: Optional[str] = None,
         cdp_port: int = 9222,
+        force_restart: bool = False,
     ) -> Dict[str, Any]:
         """Launch or attach to browser session (user everyday browser via CDP or isolated sandbox) and navigate to target URL."""
         async with self._lock:
@@ -626,6 +698,7 @@ class BrowserManager:
                 target=target,
                 browser_name=browser_name,
                 cdp_port=cdp_port,
+                force_restart=force_restart,
             )
 
     async def click(self, selector: str, text: Optional[str] = None) -> Dict[str, Any]:
@@ -1064,10 +1137,16 @@ class BrowserManager:
                 res_dict["content"] = last_screenshot["content"]
             return res_dict
 
-    async def close(self) -> Dict[str, Any]:
-        """Close the active browser session, flushing state to persistent profile."""
+    async def close(self, kill_process: bool = False, browser_name: Optional[str] = None) -> Dict[str, Any]:
+        """Close the active browser session, and optionally terminate running OS browser processes."""
         async with self._lock:
-            return await self._cleanup()
+            res = await self._cleanup()
+            if kill_process:
+                b_target = browser_name or "chrome"
+                killed_count = await asyncio.to_thread(close_browser_processes, browser_name=b_target)
+                res["message"] += f" Also terminated {killed_count} running {b_target} OS processes."
+                res["killed_processes"] = killed_count
+            return res
 
     async def _cleanup(self) -> Dict[str, Any]:
         """Internal cleanup closing pages, context, and driver (disconnects CDP without killing user's browser)."""

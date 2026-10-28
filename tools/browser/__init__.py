@@ -16,6 +16,7 @@ from tools.browser.manager import (
     is_browser_process_running,
     is_cdp_port_active,
     launch_user_browser_with_cdp,
+    close_browser_processes,
     safe_print,
 )
 
@@ -28,6 +29,7 @@ async def browser_open(
     target: str = "auto",
     browser_name: Optional[str] = None,
     cdp_port: int = 9222,
+    force_restart: bool = False,
 ) -> str:
     """Launch browser session or attach to user's everyday browser and navigate to target URL.
 
@@ -38,6 +40,7 @@ async def browser_open(
         target: 'auto' (detect live user browser or fallback to sandbox), 'user' (everyday Chrome/Edge/Brave with live logins via CDP), or 'isolated' (dedicated clean Playwright sandbox). Note: Never invent or pass custom --user-data-dir shadow directories.
         browser_name: Specific browser to target ('chrome', 'edge', 'brave') if multiple exist.
         cdp_port: Chrome DevTools Protocol remote debugging port (default: 9222).
+        force_restart: If True and browser is running without debugging enabled, automatically terminates existing browser processes and relaunches it with remote debugging (after user approval).
     """
     mgr = BrowserManager.get_instance()
     res = await mgr.open(
@@ -47,6 +50,7 @@ async def browser_open(
         target=target,
         browser_name=browser_name,
         cdp_port=cdp_port,
+        force_restart=force_restart,
     )
     return json.dumps(res, indent=2, ensure_ascii=False)
 
@@ -100,10 +104,15 @@ async def browser_actions(actions: list) -> Any:
 
 
 @with_error_reporting("browser_close")
-async def browser_close() -> str:
-    """Close the active browser session and release local resources."""
+async def browser_close(kill_process: bool = False, browser_name: Optional[str] = None) -> str:
+    """Close the active browser session, and optionally terminate running OS browser processes.
+    
+    Args:
+        kill_process: If True, terminates running operating system processes of the target browser.
+        browser_name: Optional browser to target ('chrome', 'edge', 'brave').
+    """
     mgr = BrowserManager.get_instance()
-    res = await mgr.close()
+    res = await mgr.close(kill_process=kill_process, browser_name=browser_name)
     return json.dumps(res, indent=2, ensure_ascii=False)
 
 
@@ -114,6 +123,7 @@ __all__ = [
     "find_installed_browser",
     "is_cdp_port_active",
     "launch_user_browser_with_cdp",
+    "close_browser_processes",
     "browser_open",
     "browser_click",
     "browser_type",
