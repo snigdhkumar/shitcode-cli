@@ -222,7 +222,7 @@ async def computer(
 
     elif act == "clipboard_read":
         res_read = await asyncio.to_thread(read_from_clipboard)
-        return res_read.get("content", "")
+        return res_read.get("text", res_read.get("content", ""))
 
     return f"Unknown action: '{action}'. Available: screenshot, mouse_move, left_click, right_click, middle_click, double_click, triple_click, mouse_down, mouse_up, left_click_drag, type, key, hotkey, press_enter, scroll, wait, cursor_position, window_focus, clipboard_paste, clipboard_write, clipboard_read."
 
@@ -485,7 +485,15 @@ async def computer_actions(actions: list) -> Any:
                 dur_ms = int((time.time() - t0) * 1000)
                 desc = f"clipboard_read ({res_read.get('length', 0)} chars)"
                 _safe_print(f"{CYAN}│{RESET} {GREEN}[✓]{RESET} {idx+1}. {desc:<50} {DIM}({dur_ms}ms){RESET}")
-                step_reports.append({"step": idx + 1, "action": "clipboard_read", "status": "ok", "content": res_read.get("content", ""), "elapsed_ms": dur_ms})
+                step_reports.append({
+                    "step": idx + 1,
+                    "action": "clipboard_read",
+                    "status": "ok",
+                    "text": res_read.get("text", res_read.get("content", "")),
+                    "content": res_read.get("content", ""),
+                    "length": res_read.get("length", 0),
+                    "elapsed_ms": dur_ms,
+                })
 
             else:
                 raise ValueError(f"Unknown desktop action: '{action_type}'")

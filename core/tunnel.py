@@ -304,7 +304,15 @@ async def handle_tool_call_worker(
                 return
 
     t_start = time.perf_counter()
-    tool_timeout = float(arguments.get("timeout", 60.0))
+    raw_timeout = arguments.get("timeout")
+    if raw_timeout is not None:
+        try:
+            tool_timeout = max(1.0, min(float(raw_timeout), 120.0))
+        except (ValueError, TypeError):
+            tool_timeout = 60.0
+    else:
+        tool_timeout = 60.0
+
     try:
         output = await asyncio.wait_for(execute_tool(tool_name, arguments), timeout=tool_timeout)
         elapsed_ms = int((time.perf_counter() - t_start) * 1000)
@@ -325,17 +333,27 @@ async def handle_tool_call_worker(
         }
     except asyncio.TimeoutError:
         elapsed_ms = int((time.perf_counter() - t_start) * 1000)
-        timeout_msg = f"Tool '{tool_name}' timed out after {int(tool_timeout)}s on local machine. Try narrowing arguments or increasing timeout."
-        req_entry["status"] = "error"
+        timeout_msg = (
+            f"Tool '{tool_name}' reached its execution timeout limit of {int(tool_timeout)}s (maximum 120s). "
+            f"The operation may still be running in the background on your host PC. "
+            f"You can call again to continue monitoring or check status."
+        )
+        req_entry["status"] = "timeout"
         req_entry["elapsed_ms"] = elapsed_ms
         req_entry["error"] = timeout_msg
-        print(f"         {RED}[!] Execution timeout ({elapsed_ms}ms): {timeout_msg}{RESET}")
+        print(f"         {YELLOW}[!] Execution deadline ({elapsed_ms}ms): {timeout_msg}{RESET}")
 
         response = {
             "type": "tool_result",
             "call_id": call_id,
-            "success": False,
-            "error": timeout_msg,
+            "success": True,
+            "result": {
+                "status": "timeout",
+                "tool": tool_name,
+                "timeout_seconds": tool_timeout,
+                "elapsed_ms": elapsed_ms,
+                "message": timeout_msg,
+            },
         }
     except Exception as e:
         elapsed_ms = int((time.perf_counter() - t_start) * 1000)
