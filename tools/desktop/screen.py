@@ -28,7 +28,7 @@ class ScreenManager:
     _instance: Optional[ScreenManager] = None
 
     def __init__(self):
-        self._sct = mss.mss()
+        self._sct: Optional[Any] = None
         self._last_scale_info: Dict[str, Any] = {}
 
     @classmethod
@@ -37,13 +37,27 @@ class ScreenManager:
             cls._instance = ScreenManager()
         return cls._instance
 
+    def _get_sct(self) -> Any:
+        """Lazily initialize mss screen grabber with display check."""
+        if self._sct is None:
+            if sys.platform != "win32" and not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+                raise RuntimeError("Screen capture requires an active graphical display (DISPLAY is not set).")
+            try:
+                self._sct = mss.mss()
+            except Exception as e:
+                raise RuntimeError(f"Failed to initialize screen capture: {e}")
+        return self._sct
+
     def get_monitors(self) -> List[Dict[str, Any]]:
         """Return list of available monitor geometries."""
-        return self._sct.monitors
+        try:
+            return self._get_sct().monitors
+        except Exception:
+            return [{"left": 0, "top": 0, "width": 1920, "height": 1080}]
 
     def get_primary_monitor(self) -> Dict[str, int]:
         """Return the primary monitor bounding box (index 1 in mss, or 0 for entire virtual desktop)."""
-        monitors = self._sct.monitors
+        monitors = self.get_monitors()
         if len(monitors) > 1:
             return monitors[1]
         return monitors[0]
@@ -56,20 +70,21 @@ class ScreenManager:
         save_file: bool = True,
     ) -> Dict[str, Any]:
         """Capture screen frame, downsample for AI vision context, and return standard MCP image blocks."""
-        monitors = self._sct.monitors
+        monitors = self.get_monitors()
         target_mon = monitors[monitor_idx] if (monitor_idx is not None and monitor_idx < len(monitors)) else self.get_primary_monitor()
 
-        phys_w = target_mon["width"]
-        phys_h = target_mon["height"]
-        phys_left = target_mon["left"]
-        phys_top = target_mon["top"]
+        phys_w = target_mon.get("width", 1920)
+        phys_h = target_mon.get("height", 1080)
+        phys_left = target_mon.get("left", 0)
+        phys_top = target_mon.get("top", 0)
 
         raw_png_bytes = None
         grab_error = None
 
         # 1. Primary: Sub-10ms raw pixel grab via mss
         try:
-            sct_img = self._sct.grab(target_mon)
+            sct = self._get_sct()
+            sct_img = sct.grab(target_mon)
             raw_png_bytes = mss.tools.to_png(sct_img.rgb, sct_img.size)
         except Exception as e:
             grab_error = str(e)

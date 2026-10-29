@@ -6,14 +6,18 @@ Features native Win32 direct clipboard bindings with lock-retry loops and dual t
 from __future__ import annotations
 
 import logging
+import os
 import sys
 import time
 from typing import Any, Dict
 
-import pyautogui
-import pyperclip
-
 logger = logging.getLogger("shitcode.tools.desktop.clipboard")
+
+
+def _has_display() -> bool:
+    if sys.platform == "win32":
+        return True
+    return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
 
 
 def copy_to_clipboard(text: str) -> Dict[str, Any]:
@@ -38,20 +42,24 @@ def copy_to_clipboard(text: str) -> Dict[str, Any]:
                 time.sleep(0.03)
 
     if not copied:
-        for _ in range(3):
-            try:
-                pyperclip.copy(text)
-                copied = True
-                break
-            except Exception as e:
-                last_err = e
-                time.sleep(0.03)
+        try:
+            import pyperclip
+            for _ in range(3):
+                try:
+                    pyperclip.copy(text)
+                    copied = True
+                    break
+                except Exception as e:
+                    last_err = e
+                    time.sleep(0.03)
+        except Exception as e:
+            last_err = e
 
     # Brief settle buffer (20ms) to allow OS clipboard listeners to register
     time.sleep(0.02)
 
     if not copied:
-        return {"success": False, "error": f"Failed to copy to clipboard: {last_err}"}
+        return {"success": False, "error": f"Failed to copy to clipboard: {last_err}. On Linux, ensure 'xclip' or 'xsel' is installed."}
 
     return {
         "success": True,
@@ -85,15 +93,19 @@ def read_from_clipboard() -> Dict[str, Any]:
                 time.sleep(0.03)
 
     if content is None:
-        for _ in range(3):
-            try:
-                p_val = pyperclip.paste()
-                if p_val:
-                    content = p_val
-                    break
-            except Exception as e:
-                last_err = e
-            time.sleep(0.03)
+        try:
+            import pyperclip
+            for _ in range(3):
+                try:
+                    p_val = pyperclip.paste()
+                    if p_val:
+                        content = p_val
+                        break
+                except Exception as e:
+                    last_err = e
+                time.sleep(0.03)
+        except Exception as e:
+            last_err = e
 
     result_text = content if content is not None else ""
 
@@ -110,12 +122,16 @@ def paste_text_via_clipboard(text: str) -> Dict[str, Any]:
     """Copy text to clipboard and immediately paste into active window via Ctrl+V shortcut.
     Avoids slow character-by-character keyboard typing lag and prevents dropped characters.
     """
+    if not _has_display():
+        return {"success": False, "error": "Paste via clipboard shortcut requires an active graphical display (DISPLAY is not set)."}
+
     try:
         copy_res = copy_to_clipboard(text)
         if not copy_res.get("success"):
             return copy_res
 
         time.sleep(0.03)
+        import pyautogui
         pyautogui.hotkey("ctrl", "v")
         time.sleep(0.03)
         return {

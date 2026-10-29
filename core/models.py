@@ -30,11 +30,15 @@ MODIFYING_TOOLS = {
 }
 
 # Dynamically load registered tools
+TOOLS_MAP: Dict[str, Callable[..., Any]] = {}
 try:
     from tools import ALL_TOOLS
-    TOOLS_MAP: Dict[str, Callable[..., Any]] = {fn.__name__: fn for fn in ALL_TOOLS}
-except ImportError:
-    TOOLS_MAP = {}
+    for fn in ALL_TOOLS:
+        if callable(fn):
+            TOOLS_MAP[fn.__name__] = fn
+except Exception as _load_err:
+    import logging
+    logging.getLogger("shitcode.core.models").warning(f"Error loading tools: {_load_err}")
 
 
 @dataclass

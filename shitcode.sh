@@ -11,7 +11,7 @@ else
     PYTHON_CMD=python
 fi
 
-if ! $PYTHON_CMD -c "import websockets, httpx, bs4" &>/dev/null; then
+if ! $PYTHON_CMD -c "import websockets, httpx, bs4, psutil" &>/dev/null; then
     echo "[ShitCode] Installing required dependencies..."
     $PYTHON_CMD -m pip install -q -r requirements.txt
 fi
