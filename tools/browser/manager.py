@@ -13,6 +13,7 @@ import os
 import re
 import sys
 import time
+from collections import deque
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -83,6 +84,8 @@ class BrowserManager:
         self._page: Optional[Any] = None
         self._is_headless: bool = False
         self._was_installed_on_demand: bool = False
+        self._console_logs: deque = deque(maxlen=200)
+        self._network_requests: deque = deque(maxlen=200)
         self._lock = asyncio.Lock()
 
     @classmethod
@@ -93,6 +96,116 @@ class BrowserManager:
 
     def is_active(self) -> bool:
         return self._page is not None and not self._page.is_closed()
+
+    def _attach_page_listeners(self, page: Any):
+        """Attach console and network telemetry listeners to capture DevTools logs and HTTP requests."""
+        if getattr(page, "_shitcode_listeners_attached", False):
+            return
+        page._shitcode_listeners_attached = True
+
+        def on_console(msg: Any):
+            try:
+                loc = {}
+                if hasattr(msg, "location") and isinstance(msg.location, dict):
+                    loc = {
+                        "url": msg.location.get("url") or "",
+                        "line": msg.location.get("lineNumber") or 0,
+                        "column": msg.location.get("columnNumber") or 0,
+                    }
+                entry = {
+                    "timestamp": round(time.time(), 3),
+                    "type": msg.type,
+                    "text": msg.text,
+                    "location": loc,
+                }
+                self._console_logs.append(entry)
+            except Exception:
+                pass
+
+        def on_page_error(exc: Any):
+            try:
+                entry = {
+                    "timestamp": round(time.time(), 3),
+                    "type": "error",
+                    "text": str(exc),
+                    "location": {"unhandled_exception": True},
+                }
+                self._console_logs.append(entry)
+            except Exception:
+                pass
+
+        def on_request(req: Any):
+            try:
+                hdrs = dict(req.headers) if hasattr(req, "headers") else {}
+                req_data = {
+                    "id": str(id(req)),
+                    "timestamp": round(time.time(), 3),
+                    "url": req.url,
+                    "method": req.method,
+                    "resource_type": req.resource_type,
+                    "headers": hdrs,
+                    "post_data": req.post_data if hasattr(req, "post_data") else None,
+                    "status": None,
+                    "status_text": None,
+                    "response_headers": None,
+                    "failed": False,
+                    "failure": None,
+                    "duration_ms": None,
+                    "_start_time": time.time(),
+                }
+                self._network_requests.append(req_data)
+            except Exception:
+                pass
+
+        async def on_response(resp: Any):
+            try:
+                req = resp.request
+                req_id = str(id(req))
+                for r in reversed(self._network_requests):
+                    if r.get("id") == req_id:
+                        r["status"] = resp.status
+                        r["status_text"] = resp.status_text
+                        r["response_headers"] = dict(resp.headers) if hasattr(resp, "headers") else {}
+                        start = r.get("_start_time")
+                        if start:
+                            r["duration_ms"] = int((time.time() - start) * 1000)
+                        ct = (resp.headers.get("content-type") or "").lower() if hasattr(resp, "headers") else ""
+                        rtype = r.get("resource_type") or ""
+                        if rtype in ("xhr", "fetch") or any(t in ct for t in ("json", "text", "javascript", "xml")):
+                            try:
+                                body_text = await resp.text()
+                                if len(body_text) > 32768:
+                                    r["body_preview"] = body_text[:32768] + "... [truncated]"
+                                else:
+                                    r["body"] = body_text
+                            except Exception:
+                                pass
+                        break
+            except Exception:
+                pass
+
+        def on_request_failed(req: Any):
+            try:
+                req_id = str(id(req))
+                for r in reversed(self._network_requests):
+                    if r.get("id") == req_id:
+                        r["failed"] = True
+                        r["failure"] = req.failure if hasattr(req, "failure") else "Failed"
+                        start = r.get("_start_time")
+                        if start:
+                            r["duration_ms"] = int((time.time() - start) * 1000)
+                        break
+            except Exception:
+                pass
+
+        try:
+            page.on("console", on_console)
+            page.on("pageerror", on_page_error)
+            page.on("request", on_request)
+            page.on("response", lambda resp: asyncio.create_task(on_response(resp)))
+            page.on("requestfailed", on_request_failed)
+        except Exception as attach_err:
+            logger.debug(f"Telemetry listener attach notice: {attach_err}")
 
     async def _ensure_ready(self) -> Tuple[bool, str]:
         """Ensure Playwright package and browser binaries are ready."""
@@ -238,6 +351,7 @@ class BrowserManager:
                 logger.info("Upgrading background headless session to visible desktop window...")
                 await self._cleanup()
             else:
+                self._attach_page_listeners(self._page)
                 try:
                     await self._page.goto(url, wait_until="domcontentloaded", timeout=15000)
                     title = await self._page.title()
@@ -290,6 +404,12 @@ class BrowserManager:
                 self._page = self._context.pages[0]
             else:
                 self._page = await self._context.new_page()
+
+            self._attach_page_listeners(self._page)
+            try:
+                self._context.on("page", lambda p: self._attach_page_listeners(p))
+            except Exception:
+                pass
 
             try:
                 await self._page.goto(url, wait_until="domcontentloaded", timeout=15000)
@@ -685,6 +805,22 @@ class BrowserManager:
                         extracted_data[target] = text.strip()
                         step_reports.append({"step": idx + 1, "action": "extract_scoped", "status": "ok", "target": target, "text": text.strip()[:1000], "elapsed_ms": dur_ms})
 
+                    elif action_type in ("evaluate", "eval"):
+                        script = item.get("script") or item.get("expression") or item.get("code") or item.get("target") or ""
+                        arg = item.get("arg") or item.get("value")
+                        if arg is not None:
+                            eval_res = await self._page.evaluate(script, arg)
+                        else:
+                            eval_res = await self._page.evaluate(script)
+                        dur_ms = int((time.time() - t0) * 1000)
+                        desc_snip = script.replace("\n", " ")[:25]
+                        desc = f"eval \"{desc_snip}...\""
+                        safe_print(f"{CYAN}│{RESET} {GREEN}[✓]{RESET} {idx+1}. {desc:<50} {DIM}({dur_ms}ms){RESET}")
+                        save_as = item.get("save_as") or item.get("name")
+                        if save_as:
+                            extracted_data[save_as] = eval_res
+                        step_reports.append({"step": idx + 1, "action": action_type, "status": "ok", "result": eval_res, "elapsed_ms": dur_ms})
+
                     elif action_type in ("wait", "sleep"):
                         ms = item.get("ms", 500)
                         await asyncio.sleep(ms / 1000.0)
@@ -781,6 +917,145 @@ class BrowserManager:
                 res_dict["content"] = last_screenshot["content"]
             return res_dict
 
+    async def evaluate(self, expression: str, arg: Optional[Any] = None) -> Dict[str, Any]:
+        """Execute arbitrary JavaScript expression in the active page context."""
+        async with self._lock:
+            if not self.is_active():
+                return {"success": False, "error": "No active browser session. Call browser_open first."}
+            try:
+                if arg is not None:
+                    result = await self._page.evaluate(expression, arg)
+                else:
+                    result = await self._page.evaluate(expression)
+
+                title = await self._page.title()
+                return {
+                    "success": True,
+                    "url": self._page.url,
+                    "title": title,
+                    "result": result,
+                    "message": "JavaScript expression evaluated successfully.",
+                }
+            except Exception as e:
+                return {"success": False, "error": f"JavaScript evaluation error: {e}"}
+
+    async def get_console_logs(
+        self,
+        level: Optional[str] = None,
+        limit: int = 50,
+        clear: bool = False,
+    ) -> Dict[str, Any]:
+        """Retrieve captured browser console messages and uncaught runtime errors."""
+        async with self._lock:
+            logs_list = list(self._console_logs)
+            if clear:
+                self._console_logs.clear()
+
+            # Filter by level if specified
+            if level and level.lower() not in ("all", "*"):
+                lvl = level.lower().strip()
+                if lvl in ("warn", "warning"):
+                    logs_list = [l for l in logs_list if l.get("type") in ("warn", "warning")]
+                elif lvl in ("err", "error"):
+                    logs_list = [l for l in logs_list if l.get("type") == "error"]
+                elif lvl in ("info",):
+                    logs_list = [l for l in logs_list if l.get("type") == "info"]
+                elif lvl in ("log",):
+                    logs_list = [l for l in logs_list if l.get("type") == "log"]
+                else:
+                    logs_list = [l for l in logs_list if l.get("type") == lvl]
+
+            error_count = sum(1 for l in logs_list if l.get("type") == "error")
+            warn_count = sum(1 for l in logs_list if l.get("type") in ("warn", "warning"))
+
+            sliced_logs = logs_list[-max(1, min(limit, 200)):]
+
+            return {
+                "success": True,
+                "url": self._page.url if self.is_active() else "",
+                "total_captured": len(logs_list),
+                "returned_count": len(sliced_logs),
+                "error_count": error_count,
+                "warning_count": warn_count,
+                "logs": sliced_logs,
+                "message": f"Retrieved {len(sliced_logs)} console log entries ({error_count} errors, {warn_count} warnings).",
+            }
+
+    async def get_network_traffic(
+        self,
+        filter_type: Optional[str] = None,
+        failed_only: bool = False,
+        include_headers: bool = False,
+        include_body: bool = False,
+        limit: int = 50,
+        clear: bool = False,
+    ) -> Dict[str, Any]:
+        """Retrieve captured HTTP network requests and responses (XHR/Fetch, status codes, timing, headers, payloads)."""
+        async with self._lock:
+            reqs = list(self._network_requests)
+            if clear:
+                self._network_requests.clear()
+
+            filtered: List[Dict[str, Any]] = []
+            filter_norm = (filter_type or "all").lower().strip()
+
+            for r in reqs:
+                status = r.get("status")
+                is_failed = r.get("failed") or (status is not None and status >= 400)
+                if failed_only and not is_failed:
+                    continue
+
+                rtype = (r.get("resource_type") or "").lower()
+                if filter_norm not in ("all", "*"):
+                    if filter_norm in ("api", "ajax"):
+                        if rtype not in ("xhr", "fetch"):
+                            continue
+                    elif filter_norm != rtype:
+                        continue
+
+                entry: Dict[str, Any] = {
+                    "url": r.get("url"),
+                    "method": r.get("method"),
+                    "resource_type": r.get("resource_type"),
+                    "status": r.get("status"),
+                    "status_text": r.get("status_text"),
+                    "duration_ms": r.get("duration_ms"),
+                    "failed": r.get("failed"),
+                    "failure": r.get("failure"),
+                    "timestamp": r.get("timestamp"),
+                }
+
+                if r.get("post_data"):
+                    entry["post_data"] = r.get("post_data")
+
+                if include_headers:
+                    if r.get("headers"):
+                        entry["request_headers"] = r.get("headers")
+                    if r.get("response_headers"):
+                        entry["response_headers"] = r.get("response_headers")
+
+                if include_body:
+                    if "body" in r:
+                        entry["response_body"] = r.get("body")
+                    elif "body_preview" in r:
+                        entry["response_body_preview"] = r.get("body_preview")
+
+                filtered.append(entry)
+
+            sliced = filtered[-max(1, min(limit, 200)):]
+            failed_count = sum(1 for r in filtered if r.get("failed") or (r.get("status") and r.get("status") >= 400))
+
+            return {
+                "success": True,
+                "url": self._page.url if self.is_active() else "",
+                "total_captured": len(reqs),
+                "matched_count": len(filtered),
+                "returned_count": len(sliced),
+                "failed_count": failed_count,
+                "requests": sliced,
+                "message": f"Retrieved {len(sliced)} network requests ({failed_count} failed).",
+            }
+
     async def close(self) -> Dict[str, Any]:
         """Close the active built-in browser session and save profile."""
         async with self._lock:
@@ -809,4 +1084,6 @@ class BrowserManager:
         self._page = None
         self._context = None
         self._playwright = None
+        self._console_logs.clear()
+        self._network_requests.clear()
         return {"success": True, "message": "Browser session closed successfully (persistent profile saved)."}

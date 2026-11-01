@@ -68,7 +68,7 @@ try:
 except Exception as e:
     logger.warning(f"Failed to load skills tools: {e}")
 
-# 6. Browser Automation (Playwright)
+# 6. Browser Automation (Playwright) & DevTools Telemetry
 try:
     from tools.browser import (
         browser_open,
@@ -77,6 +77,9 @@ try:
         browser_extract,
         browser_screenshot,
         browser_actions,
+        browser_evaluate,
+        browser_console,
+        browser_network,
         browser_close,
     )
     _register(browser_open)
@@ -85,6 +88,9 @@ try:
     _register(browser_extract)
     _register(browser_screenshot)
     _register(browser_actions)
+    _register(browser_evaluate)
+    _register(browser_console)
+    _register(browser_network)
     _register(browser_close)
 except Exception as e:
     logger.warning(f"Failed to load browser tools: {e}")
