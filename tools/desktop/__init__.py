@@ -4,6 +4,7 @@ Exports Anthropic-standard computer control, compound batch actions, and high-sp
 
 from __future__ import annotations
 
+from tools.desktop.accessibility import desktop_interact, desktop_snapshot
 from tools.desktop.actions import (
     clipboard_read,
     clipboard_write,
@@ -22,6 +23,8 @@ __all__ = [
     "computer",
     "computer_actions",
     "desktop_inspect",
+    "desktop_snapshot",
+    "desktop_interact",
     "windows_list",
     "window_focus",
     "window_state",

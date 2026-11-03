@@ -106,15 +106,19 @@ except Exception as e:
 # 8. Desktop & Computer Control Automation
 try:
     from tools.desktop import (
+        clipboard_read,
+        clipboard_write,
         computer,
         computer_actions,
-        windows_list,
+        desktop_interact,
+        desktop_snapshot,
+        system_info,
         window_focus,
         window_state,
-        clipboard_write,
-        clipboard_read,
-        system_info,
+        windows_list,
     )
+    _register(desktop_snapshot)
+    _register(desktop_interact)
     _register(computer)
     _register(computer_actions)
     _register(windows_list)

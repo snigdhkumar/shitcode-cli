@@ -22,6 +22,7 @@ MODIFYING_TOOLS = {
     "browser_type",
     "browser_actions",
     "browser_close",
+    "desktop_interact",
     "computer",
     "computer_actions",
     "window_focus",
