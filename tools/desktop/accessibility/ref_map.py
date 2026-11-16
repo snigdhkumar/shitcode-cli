@@ -73,3 +73,4 @@ def resolve_ref(ref_str: str) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[s
 
     entry = _SNAPSHOT_CACHE[clean_ref]
     return entry, None
+

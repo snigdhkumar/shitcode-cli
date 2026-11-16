@@ -19,13 +19,13 @@ _IS_WIN = sys.platform == "win32"
 _IS_LINUX = sys.platform.startswith("linux")
 
 
-async def capture_tree_snapshot(
+def _capture_tree_snapshot_sync(
     app_name: Optional[str] = None,
     window_id: Optional[str | int] = None,
     interactive_only: bool = True,
     max_elements: int = 60,
 ) -> Dict[str, Any]:
-    """Capture accessibility snapshot for target window or topmost active application."""
+    """Synchronous core for capturing accessibility tree snapshot."""
     ensure_desktop_session()
     snap_id = allocate_snapshot_id()
 
@@ -92,3 +92,21 @@ async def capture_tree_snapshot(
             return {"ok": False, "success": False, "error": f"Linux AT-SPI error: {e}"}
 
     return {"ok": False, "success": False, "error": f"Accessibility engine not supported on {sys.platform}."}
+
+
+async def capture_tree_snapshot(
+    app_name: Optional[str] = None,
+    window_id: Optional[str | int] = None,
+    interactive_only: bool = True,
+    max_elements: int = 60,
+) -> Dict[str, Any]:
+    """Capture accessibility snapshot asynchronously in worker thread to prevent event loop stalls."""
+    import asyncio
+    return await asyncio.to_thread(
+        _capture_tree_snapshot_sync,
+        app_name=app_name,
+        window_id=window_id,
+        interactive_only=interactive_only,
+        max_elements=max_elements,
+    )
+

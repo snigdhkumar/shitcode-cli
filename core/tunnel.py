@@ -316,7 +316,12 @@ async def handle_tool_call_worker(
     try:
         output = await asyncio.wait_for(execute_tool(tool_name, arguments), timeout=tool_timeout)
         elapsed_ms = int((time.perf_counter() - t_start) * 1000)
-        is_visual = isinstance(output, dict) and "content" in output
+        is_visual = False
+        if isinstance(output, dict):
+            if "content" in output and isinstance(output["content"], list):
+                is_visual = any(isinstance(b, dict) and b.get("type") == "image" for b in output["content"])
+            if not is_visual and ("screenshot" in output or "image" in output):
+                is_visual = True
         req_entry["status"] = "completed"
         req_entry["elapsed_ms"] = elapsed_ms
         req_entry["is_visual"] = is_visual
@@ -422,6 +427,18 @@ async def run_client_loop(
                 permission_lock = asyncio.Lock()
                 active_tool_tasks: set[asyncio.Task] = set()
 
+                async def keepalive_ping():
+                    while state.is_running and not ws.closed:
+                        try:
+                            await asyncio.sleep(20)
+                            async with ws_send_lock:
+                                if not ws.closed:
+                                    await ws.send(json.dumps({"type": "ping"}))
+                        except Exception:
+                            break
+
+                ping_task = asyncio.create_task(keepalive_ping())
+
                 welcome_raw = await ws.recv()
                 try:
                     welcome = json.loads(welcome_raw)
@@ -515,7 +532,32 @@ async def run_client_loop(
                         async with ws_send_lock:
                             await ws.send(json.dumps({"type": "pong"}))
 
+                    elif msg_type == "error":
+                        err_code = data.get("code")
+                        err_msg = data.get("error", "Server notification")
+                        if err_code == 4009:
+                            print(f"\n{YELLOW}╭────────────────────────────────────────────────────────────────────────╮{RESET}")
+                            print(f"{YELLOW}│{RESET} {BOLD}{YELLOW}Session Superseded (Code 4009){RESET}                                      {YELLOW}│{RESET}")
+                            print(f"{YELLOW}│{RESET} Another client instance just connected with this Client Token.          {YELLOW}│{RESET}")
+                            print(f"{YELLOW}╰────────────────────────────────────────────────────────────────────────╯{RESET}")
+                            ans = await async_prompt_line(state, f"{BOLD}[?] Reconnect and take over active session? [Y/n]: {RESET}")
+                            if ans.lower() not in ("y", "yes", ""):
+                                print(f"{DIM}[*] Disconnected cleanly.{RESET}")
+                                state.is_running = False
+                                return
+                            break
+                        elif err_code in (4003, 4008):
+                            reset_device_token()
+                            print_invalid_token_card(reason=err_msg)
+                            break
+                        elif err_code == 4429:
+                            print(f"\n{YELLOW}[!] Connection rate limit reached ({err_msg}). Cooling down for 30s...{RESET}")
+                            await asyncio.sleep(30)
+                            break
+
         except websockets.exceptions.ConnectionClosed as cc:
+            if "ping_task" in locals() and not ping_task.done():
+                ping_task.cancel()
             for t in list(active_tool_tasks):
                 if not t.done():
                     t.cancel()
@@ -530,7 +572,7 @@ async def run_client_loop(
                 backoff = 0
                 continue
 
-            if cc.code in (4003, 4008) or (not session_established and cc.code in (1006, 4001)):
+            if cc.code in (4003, 4008) or (not session_established and cc.code == 4001):
                 reset_device_token()
                 reason_str = "This client token was revoked or refreshed from the ShitCode dashboard." if cc.code == 4008 else "The token was rejected by the ShitCode gateway."
                 print_invalid_token_card(reason=reason_str)

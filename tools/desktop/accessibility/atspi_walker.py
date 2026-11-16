@@ -78,3 +78,4 @@ def walk_atspi_tree(
 
     _traverse(root_accessible, 0)
     return elements
+

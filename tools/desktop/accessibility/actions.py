@@ -72,6 +72,20 @@ def perform_select(elem: Any) -> bool:
     return False
 
 
+def perform_expand(elem: Any) -> bool:
+    """Expand combobox, menu, or tree node via ExpandCollapsePattern."""
+    try:
+        pat = elem.GetCurrentPattern(UIA_EXPAND_COLLAPSE_PATTERN_ID)
+        if pat:
+            import comtypes.gen.UIAutomationClient as uia_client
+            exp = pat.QueryInterface(uia_client.IUIAutomationExpandCollapsePattern)
+            exp.Expand()
+            return True
+    except Exception as e:
+        logger.debug(f"ExpandCollapsePattern failed: {e}")
+    return False
+
+
 def perform_focus(elem: Any) -> bool:
     """Set keyboard focus to element."""
     try:
@@ -80,3 +94,4 @@ def perform_focus(elem: Any) -> bool:
     except Exception as e:
         logger.debug(f"SetFocus failed: {e}")
     return False
+

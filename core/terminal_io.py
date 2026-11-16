@@ -104,47 +104,53 @@ def read_console_line(state: Any) -> tuple[str, bool]:
     - If user pressed physical ESC key (ASCII 27): returns ("", True)
     - If user pressed Enter: returns (text, False)
     """
-    if sys.platform == "win32" and sys.stdin.isatty():
-        import msvcrt
-        buf: list[str] = []
-        while state.is_running:
-            if msvcrt.kbhit():
-                ch = msvcrt.getwch()
-                if ch == "\x1b":  # Physical ESC key pressed
-                    sys.stdout.write("\n")
-                    sys.stdout.flush()
-                    return ("", True)
-                elif ch in ("\r", "\n"):  # Enter pressed
-                    sys.stdout.write("\n")
-                    sys.stdout.flush()
-                    return ("".join(buf), False)
-                elif ch in ("\x08", "\x7f"):  # Backspace
-                    if buf:
-                        buf.pop()
-                        sys.stdout.write("\b \b")
+    if sys.platform == "win32":
+        try:
+            import msvcrt
+            buf: list[str] = []
+            while state.is_running:
+                if msvcrt.kbhit():
+                    ch = msvcrt.getwch()
+                    if ch == "\x1b":  # Physical ESC key pressed
+                        sys.stdout.write("\n")
                         sys.stdout.flush()
-                elif ch == "\x16":  # Ctrl+V paste
-                    clip_text = get_clipboard_text()
-                    if clip_text:
-                        clean_paste = clip_text.replace("\r\n", " ").replace("\n", " ")
-                        buf.extend(list(clean_paste))
-                        sys.stdout.write(clean_paste)
+                        return ("", True)
+                    elif ch in ("\r", "\n"):  # Enter pressed
+                        sys.stdout.write("\n")
                         sys.stdout.flush()
-                elif ch == "\x0f":  # Ctrl+O (toggle enlarged AI request view)
-                    sys.stdout.write("\n")
-                    sys.stdout.flush()
-                    return ("__CTRL_O__", False)
-                elif ch == "\x03":  # Ctrl+C
-                    raise KeyboardInterrupt
-                elif ch in ("\x00", "\xe0"):  # Extended key prefix (arrows, function keys)
-                    msvcrt.getwch()  # Consume second scan code
-                elif ch.isprintable():
-                    buf.append(ch)
-                    sys.stdout.write(ch)
-                    sys.stdout.flush()
-            else:
-                time.sleep(0.04)
-        return ("", False)
+                        return ("".join(buf), False)
+                    elif ch in ("\x08", "\x7f"):  # Backspace
+                        if buf:
+                            buf.pop()
+                            sys.stdout.write("\b \b")
+                            sys.stdout.flush()
+                    elif ch == "\x16":  # Ctrl+V paste
+                        clip_text = get_clipboard_text()
+                        if clip_text:
+                            clean_paste = clip_text.replace("\r\n", " ").replace("\n", " ")
+                            buf.extend(list(clean_paste))
+                            sys.stdout.write(clean_paste)
+                            sys.stdout.flush()
+                    elif ch == "\x0f":  # Ctrl+O (toggle enlarged AI request view)
+                        sys.stdout.write("\n")
+                        sys.stdout.flush()
+                        return ("__CTRL_O__", False)
+                    elif ch == "\x03":  # Ctrl+C
+                        raise KeyboardInterrupt
+                    elif ch in ("\x00", "\xe0"):  # Extended key prefix (arrows, function keys)
+                        try:
+                            msvcrt.getwch()  # Consume second scan code
+                        except Exception:
+                            pass
+                    elif ch.isprintable():
+                        buf.append(ch)
+                        sys.stdout.write(ch)
+                        sys.stdout.flush()
+                else:
+                    time.sleep(0.04)
+            return ("", False)
+        except Exception:
+            pass
     elif sys.platform != "win32" and sys.stdin.isatty():
         import termios
         import tty

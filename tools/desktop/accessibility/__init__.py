@@ -32,12 +32,14 @@ async def desktop_interact(
     value: str = "",
     **kwargs: Any,
 ) -> Dict[str, Any]:
-    """Execute a semantic or coordinate fallback action on an element by its ref."""
+    """Execute a semantic or coordinate fallback action on an element by its ref asynchronously."""
+    import asyncio
     entry, err = resolve_ref(ref)
     if err:
         return err
 
-    return dispatch_element_action(
+    return await asyncio.to_thread(
+        dispatch_element_action,
         entry=entry,
         action=action,
         value=value or kwargs.get("text", ""),
@@ -51,3 +53,4 @@ __all__ = [
     "dispatch_element_action",
     "resolve_ref",
 ]
+

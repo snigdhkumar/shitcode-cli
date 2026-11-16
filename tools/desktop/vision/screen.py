@@ -102,7 +102,7 @@ class ScreenManager:
                 "ok": True,
                 "content": [
                     {"type": "text", "text": f"Screenshot taken: {orig_w}x{orig_h} (scaled to {pil_img.size[0]}x{pil_img.size[1]})."},
-                    {"type": "image", "data": b64_data, "mime_type": "image/jpeg"},
+                    {"type": "image", "data": b64_data, "mimeType": "image/jpeg", "mime_type": "image/jpeg"},
                 ],
                 "display": {
                     "width": orig_w,

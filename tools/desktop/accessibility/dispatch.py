@@ -9,6 +9,7 @@ import time
 from typing import Any, Dict
 
 from tools.desktop.accessibility.actions import (
+    perform_expand,
     perform_focus,
     perform_invoke,
     perform_select,
@@ -88,14 +89,29 @@ def dispatch_element_action(
         return {"ok": False, "success": False, "ref": ref, "error": f"Failed to toggle '{name}' ({role})."}
 
     # 4. Select ladder
-    elif act == "select":
+    elif act in ("select", "choose"):
+        if elem and value and perform_value(elem, value):
+            return {"ok": True, "success": True, "ref": ref, "action": "select", "method": "semantic_value", "message": f"Set '{value}' on '{name}' ({role})."}
         if elem and perform_select(elem):
             return {"ok": True, "success": True, "ref": ref, "action": "select", "method": "semantic_select", "message": f"Selected '{name}' ({role})."}
         if physical_click_fallback(entry):
-            return {"ok": True, "success": True, "ref": ref, "action": "select", "method": "physical_click", "message": f"Selected '{name}' ({role}) via click."}
+            if value:
+                time.sleep(0.04)
+                ctrl = InputController.get_instance()
+                ctrl.type_text(value)
+                ctrl.key_press("enter")
+            return {"ok": True, "success": True, "ref": ref, "action": "select", "method": "physical_click_type", "message": f"Selected '{name}' ({role}) via click."}
         return {"ok": False, "success": False, "ref": ref, "error": f"Failed to select '{name}' ({role})."}
 
-    # 5. Focus ladder
+    # 5. Expand ladder
+    elif act == "expand":
+        if elem and perform_expand(elem):
+            return {"ok": True, "success": True, "ref": ref, "action": "expand", "method": "semantic_expand", "message": f"Expanded '{name}' ({role})."}
+        if physical_click_fallback(entry):
+            return {"ok": True, "success": True, "ref": ref, "action": "expand", "method": "physical_click", "message": f"Expanded '{name}' ({role}) via click."}
+        return {"ok": False, "success": False, "ref": ref, "error": f"Failed to expand '{name}' ({role})."}
+
+    # 6. Focus ladder
     elif act == "focus":
         if elem and perform_focus(elem):
             return {"ok": True, "success": True, "ref": ref, "action": "focus", "method": "semantic_focus", "message": f"Focused '{name}' ({role})."}
@@ -104,3 +120,4 @@ def dispatch_element_action(
         return {"ok": False, "success": False, "ref": ref, "error": f"Failed to focus '{name}' ({role})."}
 
     return {"ok": False, "success": False, "ref": ref, "error": f"Unsupported accessibility action '{action}'."}
+

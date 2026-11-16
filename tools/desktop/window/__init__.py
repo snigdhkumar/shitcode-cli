@@ -37,3 +37,4 @@ __all__ = [
     "focus_desktop_window",
     "set_desktop_window_state",
 ]
+

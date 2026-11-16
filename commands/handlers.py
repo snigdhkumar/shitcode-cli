@@ -267,6 +267,9 @@ def process_command(cmd_raw: str, state: Any, tools_map: Optional[Dict[str, Any]
         render_request_history(state)
 
     elif action in ("clear", "cls", "/clear", "esc", "escape"):
+        if action in ("clear", "cls", "/clear"):
+            state.request_history = []
+            state.last_ai_request = None
         clear_screen()
         print_banner(state, tools_map=tools_map)
 

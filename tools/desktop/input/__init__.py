@@ -33,8 +33,7 @@ def get_pyautogui() -> Any:
         raise RuntimeError(_pyautogui_error)
     try:
         import pyautogui
-        pyautogui.FAILSAFE = False
-        pyautogui.PAUSE = 0.05
+        pyautogui.FAILSAFE, pyautogui.PAUSE = False, 0.05
         _pyautogui = pyautogui
         return _pyautogui
     except Exception as e:
@@ -73,11 +72,21 @@ class InputController:
         ag.moveTo(int(x), int(y))
         return int(x), int(y)
 
-    def mouse_down(self, button: str = "left") -> None:
-        get_pyautogui().mouseDown(button=button)
+    def mouse_down(self, x: Optional[int | float] = None, y: Optional[int | float] = None, button: str = "left") -> Tuple[int, int]:
+        ag = get_pyautogui()
+        if x is not None and y is not None:
+            ag.moveTo(int(x), int(y))
+            time.sleep(0.02)
+        ag.mouseDown(button=button)
+        return self.get_cursor_position()
 
-    def mouse_up(self, button: str = "left") -> None:
-        get_pyautogui().mouseUp(button=button)
+    def mouse_up(self, x: Optional[int | float] = None, y: Optional[int | float] = None, button: str = "left") -> Tuple[int, int]:
+        ag = get_pyautogui()
+        if x is not None and y is not None:
+            ag.moveTo(int(x), int(y))
+            time.sleep(0.02)
+        ag.mouseUp(button=button)
+        return self.get_cursor_position()
 
     def click(self, x: Optional[int | float] = None, y: Optional[int | float] = None, button: str = "left") -> Tuple[int, int]:
         ag = get_pyautogui()
@@ -89,24 +98,26 @@ class InputController:
 
     def double_click(self, x: Optional[int | float] = None, y: Optional[int | float] = None) -> Tuple[int, int]:
         ag = get_pyautogui()
-        if x is not None and y is not None:
-            ag.doubleClick(x=int(x), y=int(y))
-            return int(x), int(y)
-        ag.doubleClick()
-        return self.get_cursor_position()
+        ag.doubleClick(x=int(x), y=int(y)) if (x is not None and y is not None) else ag.doubleClick()
+        return (int(x), int(y)) if (x is not None and y is not None) else self.get_cursor_position()
 
     def triple_click(self, x: Optional[int | float] = None, y: Optional[int | float] = None) -> Tuple[int, int]:
         ag = get_pyautogui()
-        if x is not None and y is not None:
-            ag.tripleClick(x=int(x), y=int(y))
-            return int(x), int(y)
-        ag.tripleClick()
-        return self.get_cursor_position()
+        ag.tripleClick(x=int(x), y=int(y)) if (x is not None and y is not None) else ag.tripleClick()
+        return (int(x), int(y)) if (x is not None and y is not None) else self.get_cursor_position()
 
-    def drag_to(self, x: int | float, y: int | float) -> Tuple[int, int]:
+    def drag_to(self, to_x: int | float, to_y: int | float, from_x: Optional[int | float] = None, from_y: Optional[int | float] = None, button: str = "left") -> Tuple[int, int]:
         ag = get_pyautogui()
-        ag.dragTo(int(x), int(y), button="left", duration=0.2)
-        return int(x), int(y)
+        if from_x is not None and from_y is not None:
+            ag.moveTo(int(from_x), int(from_y))
+            time.sleep(0.05)
+        # Mouse down and hold for OLE drag detection threshold
+        ag.mouseDown(button=button)
+        time.sleep(0.1)
+        ag.moveTo(int(to_x), int(to_y), duration=0.25)
+        time.sleep(0.06)  # Settle over drop target
+        ag.mouseUp(button=button)
+        return int(to_x), int(to_y)
 
     def scroll(self, clicks: int = -3) -> None:
         get_pyautogui().scroll(clicks)
@@ -136,3 +147,4 @@ __all__ = [
     "get_pyautogui",
     "InputController",
 ]
+

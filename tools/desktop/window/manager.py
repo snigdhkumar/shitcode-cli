@@ -130,3 +130,4 @@ def set_desktop_window_state(
             return {"success": False, "ok": False, "error": f"Failed to set window state on Linux: {e}"}
 
     return {"success": False, "ok": False, "error": f"Unsupported platform '{sys.platform}'."}
+

@@ -74,3 +74,4 @@ def map_key_win(key_name: str) -> str:
     """Normalize incoming key string to Windows pyautogui key identifier."""
     cleaned = key_name.strip().lower()
     return WIN_KEY_MAP.get(cleaned, cleaned)
+

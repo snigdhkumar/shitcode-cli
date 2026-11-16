@@ -67,3 +67,4 @@ def map_key_linux(key_name: str) -> str:
     """Normalize incoming key string to Linux X11 keysym or pyautogui key identifier."""
     cleaned = key_name.strip().lower()
     return LINUX_KEY_MAP.get(cleaned, cleaned)
+

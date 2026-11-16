@@ -8,20 +8,25 @@ import ctypes
 import logging
 import os
 import sys
+import threading
 from typing import Any, Optional
 
 logger = logging.getLogger("shitcode.tools.desktop.accessibility.session")
 _IS_WIN = sys.platform == "win32"
 _IS_LINUX = sys.platform.startswith("linux")
 
-_UIA_CLIENT: Optional[Any] = None
+_LOCAL = threading.local()
 
 
 def ensure_desktop_session() -> bool:
     """Ensure the calling thread is attached to the interactive user desktop session."""
     if _IS_WIN:
         try:
-            # 0x01FF = GENERIC_ALL access for desktop
+            # Check if thread is already attached to interactive desktop
+            h_current = ctypes.windll.user32.GetThreadDesktop(ctypes.windll.kernel32.GetCurrentThreadId())
+            if h_current:
+                return True
+            # Fallback for unattached worker/service threads
             h_desk = ctypes.windll.user32.OpenDesktopW("Default", 0, False, 0x01FF)
             if h_desk:
                 ctypes.windll.user32.SetThreadDesktop(h_desk)
@@ -36,19 +41,26 @@ def ensure_desktop_session() -> bool:
 
 def get_win_uia() -> Optional[Any]:
     """Lazily initialize Windows CUIAutomation COM client attached to interactive desktop."""
-    global _UIA_CLIENT
     if not _IS_WIN:
         return None
-    if _UIA_CLIENT is not None:
-        return _UIA_CLIENT
+
+    client = getattr(_LOCAL, "uia_client", None)
+    if client is not None:
+        return client
 
     ensure_desktop_session()
     try:
+        import comtypes
+        try:
+            comtypes.CoInitialize()
+        except Exception:
+            pass
         import comtypes.client
         comtypes.client.GetModule("UIAutomationCore.dll")
         from comtypes.gen.UIAutomationClient import CUIAutomation, IUIAutomation
-        _UIA_CLIENT = comtypes.client.CreateObject(CUIAutomation, interface=IUIAutomation)
-        return _UIA_CLIENT
+        client = comtypes.client.CreateObject(CUIAutomation, interface=IUIAutomation)
+        _LOCAL.uia_client = client
+        return client
     except Exception as e:
         logger.debug(f"Failed to initialize Windows UIAutomation: {e}")
         return None

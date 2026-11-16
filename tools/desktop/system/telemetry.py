@@ -73,3 +73,4 @@ def get_system_metrics() -> Dict[str, Any]:
 async def system_info() -> Dict[str, Any]:
     """Async wrapper tool for system diagnostics."""
     return get_system_metrics()
+
